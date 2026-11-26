@@ -152,11 +152,34 @@ def stats():
                             FROM query_log ORDER BY id DESC LIMIT 30""").fetchall()
         tk = c.execute("SELECT count(*) FILTER (WHERE status='open') AS open, count(*) AS total FROM tickets").fetchone()
         # Разъяснения, которые агент использует чаще всего, — кандидаты на внесение в регламент (инициатива бота).
-        hot = c.execute("""SELECT a.id, a.question, a.answer, d.title, count(*) AS uses
+        hot = c.execute("""SELECT a.id, a.question, a.answer, a.clause_no, d.title, count(*) AS uses
                             FROM query_log q, jsonb_array_elements(q.citations) cit
                             JOIN kb_answers a ON 'K' || a.id = cit->>'id' LEFT JOIN documents d ON d.id=a.doc_id
-                            WHERE q.outcome='answered' GROUP BY 1,2,3,4 ORDER BY uses DESC LIMIT 10""").fetchall()
+                            WHERE q.outcome='answered' GROUP BY 1,2,3,4,5 ORDER BY uses DESC LIMIT 10""").fetchall()
+        for h in hot:
+            h["proposal"] = proposal(c, h)
     return {"summary": s, "last": last, "tickets": tk, "hot": hot}
+
+
+# Порог «разъяснение относится к этому разделу» выше порога поиска: замер 26.11 — несвязанные разделы
+# дают 0,59–0,62 (отпуск → «Согласование сметы», командировка → «Формирование команды»).
+PROPOSAL_MIN = 0.70
+
+
+def proposal(c, h) -> str:
+    """Предложение службе качества: куда внести разъяснение. Собирается кодом по шаблону из уже утверждённого
+    ответа (без вызова LLM): регламент, к которому привязано разъяснение, иначе — ближайший по смыслу раздел
+    действующего регламента; если близкого раздела нет — нужен новый пункт в профильном регламенте."""
+    text = f"«{h['answer']}»"
+    if h["title"]:
+        return f"Внести в «{h['title']}»" + (f", п. {h['clause_no']}" if h["clause_no"] else "") + f": {text}"
+    near = c.execute("""SELECT d.title, ch.section, 1 - (ch.embedding <=> a.embedding) AS sim
+                        FROM kb_answers a, chunks ch JOIN documents d ON d.id = ch.doc_id
+                        WHERE a.id = %s AND d.status = 'in_force'
+                        ORDER BY ch.embedding <=> a.embedding LIMIT 1""", (h["id"],)).fetchone()
+    if near and near["sim"] >= PROPOSAL_MIN:
+        return f"Внести в «{near['title']}», раздел «{near['section']}»: {text}"
+    return f"Регламента по этой теме в базе нет — добавить пункт в профильный регламент: {text}"
 
 
 @app.post("/api/report")

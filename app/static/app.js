@@ -218,8 +218,8 @@ async function loadStats() {
     <div class="kpi"><b>${m.avg_calls ?? "—"}</b><span>вызовов LLM на вопрос</span></div>
     <div class="kpi"><b>${m.out_of_scope}</b><span>вне регламентов</span></div>
     <div class="kpi"><b>${s.tickets.open} / ${s.tickets.total}</b><span>писем в службу качества: ждут ответа / всего</span></div></div>
-    ${s.hot.length ? `<h3>Частые вопросы, закрытые разъяснениями службы качества — кандидаты на внесение в регламент</h3><table><tr><th>Вопрос</th><th>Разъяснение</th><th>Регламент</th><th>Использовано раз</th></tr>` +
-      s.hot.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.title || "—")}</td><td>${x.uses}</td></tr>`).join("") + "</table><h3>Журнал вопросов</h3>" : ""}
+    ${s.hot.length ? `<h3>Частые вопросы, закрытые разъяснениями службы качества — кандидаты на внесение в регламент</h3><table><tr><th>Вопрос</th><th>Разъяснение</th><th>Предложение агента по регламенту</th><th>Использовано раз</th></tr>` +
+      s.hot.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.proposal || "—")}</td><td>${x.uses}</td></tr>`).join("") + "</table><h3>Журнал вопросов</h3>" : ""}
     <table><tr><th>Время</th><th>Сотрудник</th><th>Вопрос</th><th>Итог</th><th>с</th><th>Токены</th><th>Оценка</th></tr>` +
     s.last.map(q => `<tr><td>${fmt(q.ts)}</td><td>${esc(q.user_name)}</td><td>${esc(q.question)}</td><td>${q.outcome}</td>
       <td>${(q.latency_ms / 1000).toFixed(1)}</td><td>${q.tokens_in}→${q.tokens_out}</td><td>${q.feedback ?? ""}</td></tr>`).join("") + "</table>";
