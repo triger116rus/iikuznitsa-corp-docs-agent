@@ -134,6 +134,7 @@ async function loadQuality() {
   $("#ticketList").innerHTML = t.length ? summary + t.map(x => `<div class="t ${x.overdue ? "overdue" : ""}" data-id="${x.id}">
     <span class="st ${x.status}">Запрос № ${x.id} · ${fmt(x.created_at)} · ${esc(x.user_name)}${x.department ? " · " + esc(x.department) : ""} · ${x.status === "open" ? (x.overdue ? `<b class="over">ПРОСРОЧЕН — срок ответа был ${fmt(x.due_at)}</b>` : "открыт, ответ до " + fmt(x.due_at)) : "отвечен " + fmt(x.answered_at)}</span>
     <div><b>${esc(x.question)}</b></div>
+    ${x.status === "open" && x.context && x.context.redirect_note ? `<div class="hint">Переадресовано (${esc(x.context.redirect_by || "")}): ${esc(x.context.redirect_note)} — ждём окончательного ответа</div>` : ""}
     <details><summary>Письмо на ${esc(x.mail_to)}</summary><pre>${esc(x.mail_body)}</pre></details>
     ${x.status === "open" ? `<textarea placeholder="Ответ службы качества (уйдёт сотруднику и в базу знаний агента)"></textarea>
       <div><select>${opts}</select><input class="cl" placeholder="пункт, напр. 2.3" size="10">

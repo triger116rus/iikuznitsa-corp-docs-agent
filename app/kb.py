@@ -28,3 +28,11 @@ def add_answer(ticket_id: int, answer: str, answered_by: str, doc_id: int | None
             c.execute("""INSERT INTO doc_links(src_answer,kind,dst_doc,dst_chunk,origin,evidence)
                          VALUES (%s,'explains',%s,%s,'manual',%s)""", (kb_id, doc_id, dst, answer[:200]))
     return kb_id
+
+
+def note_redirect(ticket_id: int, text: str, by: str) -> None:
+    """Промежуточный ответ службы качества (вопрос переадресован): отмечаем в запросе, в базу разъяснений не добавляем."""
+    import json
+    with db.conn() as c:
+        c.execute("UPDATE tickets SET context = coalesce(context, '{}'::jsonb) || %s WHERE id=%s AND status='open'",
+                  (json.dumps({"redirect_note": text[:500], "redirect_by": by}, ensure_ascii=False), ticket_id))

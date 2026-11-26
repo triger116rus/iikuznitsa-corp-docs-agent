@@ -16,6 +16,9 @@ from email.utils import parseaddr
 from . import config, kb
 
 TAG = re.compile(r"\[Регламенты #(\d+)\]")
+# Промежуточный ответ («Переадресовано в отдел кадров…», «не по адресу») — не разъяснение: в базу не кладём,
+# запрос остаётся открытым (срок ответа продолжает идти) до окончательного ответа.
+REDIRECT = re.compile(r"^\W*переадресован", re.I)
 QUOTE_HEADER = re.compile(r"^.{0,160}(писал|пишет|wrote).*:\s*$", re.I)
 
 
@@ -92,7 +95,10 @@ def poll_once() -> int:
             if not m or sender == config.MAIL_USER.lower():
                 continue
             answer = _text(msg)
-            if answer:
+            if answer and REDIRECT.match(answer):
+                kb.note_redirect(int(m.group(1)), answer, sender)
+                n += 1
+            elif answer:
                 try:
                     kb.add_answer(int(m.group(1)), answer, f"Служба качества ({sender})")
                     n += 1
