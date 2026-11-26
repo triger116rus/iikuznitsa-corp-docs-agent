@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Архитектура агента</title>
+<style>
+body{margin:0;background:#fff;font-family:"Segoe UI",Roboto,Arial,sans-serif}
+svg{display:block}
+.box{fill:#fff;stroke:#c9c9d1;stroke-width:1.5}
+.zone{fill:#f6f6f8;stroke:#d9d9df;stroke-width:1.2;stroke-dasharray:6 4}
+.llm{fill:#fdecee;stroke:#c8102e;stroke-width:1.5}
+.code{fill:#eef4ff;stroke:#1d4fa8;stroke-width:1.5}
+.db{fill:#eefaf1;stroke:#1a7f37;stroke-width:1.5}
+.mail{fill:#fff6e0;stroke:#9a6700;stroke-width:1.5}
+.t{font-size:14px;fill:#1d1d1f}.s{font-size:10.5px;fill:#55555c}.h{font-size:13px;font-weight:700;fill:#1d1d1f}
+.z{font-size:12px;fill:#6b6b70;font-weight:600}
+.ln{stroke:#8a8a93;stroke-width:1.6;fill:none;marker-end:url(#a)}
+.ln2{stroke:#c8102e;stroke-width:1.6;fill:none;marker-end:url(#a2)}
+</style></head><body>
+<svg width="1400" height="760" viewBox="0 0 1400 760">
+<defs>
+<marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a8a93"/></marker>
+<marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#c8102e"/></marker>
+</defs>
+<text x="30" y="36" style="font-size:20px;font-weight:700">ИИ-агент по корпоративным регламентам — архитектура</text>
+<text x="30" y="58" class="s">2 вызова LLM на вопрос, всё проверяемое — кодом и SQL; модели и данные — в изолированном контуре, внешних API нет</text>
+
+<!-- пользователь и фронт -->
+<rect x="30" y="100" width="170" height="70" rx="10" class="box"/><text x="45" y="128" class="h">Сотрудник</text><text x="45" y="148" class="s">браузер (веб-чат)</text>
+<rect x="30" y="200" width="170" height="70" rx="10" class="box"/><text x="45" y="228" class="h">HTTPS-фронт</text><text x="45" y="248" class="s">Caddy на VPS → SSH-туннель</text>
+<path d="M115 170 L115 198" class="ln"/>
+
+<!-- контур -->
+<rect x="240" y="80" width="1130" height="650" rx="14" class="zone"/>
+<text x="258" y="102" class="z">ИЗОЛИРОВАННЫЙ КОНТУР — сервер 28 vCPU / 48 ГБ, без GPU</text>
+<path d="M200 235 L268 235" class="ln"/>
+
+<!-- агентный цикл -->
+<text x="270" y="132" class="h">Агентный цикл (FastAPI, app/agent.py)</text>
+<g>
+<rect x="270" y="145" width="280" height="46" rx="8" class="code"/><text x="282" y="166" class="t">0. Где искать — за 0,1 с</text><text x="282" y="182" class="s">гибридный поиск без LLM → ссылки на пункты</text>
+<rect x="270" y="201" width="280" height="46" rx="8" class="llm"/><text x="282" y="222" class="t">1. План (LLM №1)</text><text x="282" y="238" class="s">о правилах ли вопрос; под-запросы</text>
+<rect x="270" y="257" width="280" height="46" rx="8" class="code"/><text x="282" y="278" class="t">2. Гибридный поиск</text><text x="282" y="294" class="s">FTS russian + вектор, RRF; разъяснения СК</text>
+<rect x="270" y="313" width="280" height="56" rx="8" class="code"/><text x="282" y="334" class="t">3. Проверки кодом</text><text x="282" y="350" class="s">есть ли близкие пункты? ответ зависит</text><text x="282" y="363" class="s">от подразделения? → уточнение</text>
+<rect x="270" y="379" width="280" height="46" rx="8" class="code"/><text x="282" y="400" class="t">4. Обход графа связей</text><text x="282" y="416" class="s">рекурсивный CTE: ссылки, разделы, пробелы базы</text>
+<rect x="270" y="435" width="280" height="46" rx="8" class="llm"/><text x="282" y="456" class="t">5. Ответ (LLM №2, поток)</text><text x="282" y="472" class="s">JSON: цитаты → ответ → оговорка → статус</text>
+<rect x="270" y="491" width="280" height="46" rx="8" class="code"/><text x="282" y="512" class="t">6. Проверка цитат кодом</text><text x="282" y="528" class="s">цитата = подстрока пункта, иначе не показываем</text>
+<path d="M410 191 L410 199" class="ln"/><path d="M410 247 L410 255" class="ln"/><path d="M410 303 L410 311" class="ln"/><path d="M410 369 L410 377" class="ln"/><path d="M410 425 L410 433" class="ln"/><path d="M410 481 L410 489" class="ln"/>
+</g>
+
+<!-- исходы -->
+<text x="270" y="572" class="h">Исход</text>
+<rect x="270" y="582" width="160" height="58" rx="8" class="box"/><text x="282" y="604" class="t">Ответ</text><text x="282" y="621" class="s">ссылки на пункты,</text><text x="282" y="634" class="s">оговорка при неполноте</text>
+<rect x="440" y="582" width="160" height="58" rx="8" class="box"/><text x="452" y="604" class="t">Уточнение</text><text x="452" y="621" class="s">«О каком подразделении?»,</text><text x="452" y="634" class="s">«все варианты»; ≤ 2 раз</text>
+<rect x="610" y="582" width="190" height="58" rx="8" class="mail"/><text x="622" y="604" class="t">Письмо в службу качества</text><text x="622" y="621" class="s">нет ответа — не выдумываем;</text><text x="622" y="634" class="s">сотрудник в копии</text>
+<rect x="810" y="582" width="160" height="58" rx="8" class="box"/><text x="822" y="604" class="t">Вне регламентов</text><text x="822" y="621" class="s">премия, курс валют →</text><text x="822" y="634" class="s">«к руководителю»</text>
+<path d="M410 537 L410 580" class="ln"/>
+
+<!-- модели -->
+<text x="590" y="132" class="h">Локальные модели (llama.cpp)</text>
+<rect x="590" y="145" width="290" height="58" rx="8" class="llm"/><text x="602" y="168" class="t">Qwen3-30B-A3B Q4_K_M</text><text x="602" y="186" class="s">план и ответ; 2 слота, кэш промпта; Apache 2.0</text>
+<rect x="590" y="213" width="290" height="58" rx="8" class="llm"/><text x="602" y="236" class="t">bge-m3 Q8_0</text><text x="602" y="254" class="s">эмбеддинги (с расшифровкой ролей); MIT</text>
+<path d="M550 224 L588 180" class="ln2"/><path d="M550 458 L588 190" class="ln2"/><path d="M550 280 L588 245" class="ln2"/>
+
+<!-- БД -->
+<text x="590" y="310" class="h">PostgreSQL 16 + pgvector + pg_trgm</text>
+<rect x="590" y="323" width="290" height="190" rx="8" class="db"/>
+<text x="602" y="346" class="t">documents</text><text x="682" y="346" class="s">регламенты, подразделение, статус</text>
+<text x="602" y="370" class="t">chunks</text><text x="682" y="370" class="s">пункты: текст, FTS, вектор</text>
+<text x="602" y="394" class="t">doc_links</text><text x="682" y="394" class="s">граф связей (см. справа)</text>
+<text x="602" y="418" class="t">kb_answers</text><text x="682" y="418" class="s">разъяснения службы качества</text>
+<text x="602" y="442" class="t">tickets</text><text x="682" y="442" class="s">письма в службу качества</text>
+<text x="602" y="466" class="t">dialogs</text><text x="682" y="466" class="s">уточнения в диалоге</text>
+<text x="602" y="490" class="t">query_log</text><text x="682" y="490" class="s">шаги, токены, время → аналитика</text>
+<path d="M550 280 L588 360" class="ln"/><path d="M550 402 L588 394" class="ln"/>
+
+<!-- граф -->
+<text x="900" y="132" class="h">Граф связей (строится при загрузке)</text>
+<rect x="900" y="145" width="440" height="250" rx="8" class="box"/>
+<circle cx="950" cy="200" r="11" fill="#c8102e"/><text x="968" y="204" class="s">Регламент ИБ</text>
+<circle cx="950" cy="265" r="11" fill="#1d6fd1"/><text x="968" y="269" class="s">Регламент ДБРЦТ</text>
+<circle cx="950" cy="330" r="11" fill="#1a7f37"/><text x="968" y="334" class="s">Регламент Тех. дирекции</text>
+<rect x="1110" y="186" width="44" height="24" rx="12" fill="#f0f0f3" stroke="#aaa"/><text x="1121" y="203" class="s" style="font-weight:700">РП</text>
+<rect x="1110" y="250" width="44" height="24" rx="12" fill="#f0f0f3" stroke="#aaa"/><text x="1122" y="267" class="s" style="font-weight:700">SS</text>
+<rect x="1240" y="300" width="14" height="22" fill="#fff" stroke="#5a3e9b" stroke-dasharray="3 2"/><text x="1110" y="342" class="s" style="fill:#5a3e9b">«Арбитраж расчёта себестоимости» —</text><text x="1110" y="356" class="s" style="fill:#5a3e9b">документа нет в базе (пробел)</text>
+<path d="M1060 200 L1108 198" class="ln"/><path d="M1060 204 L1108 262" class="ln"/><path d="M1060 266 L1108 200" class="ln"/><path d="M1100 334 L1238 312" style="stroke:#5a3e9b;stroke-width:1.6;fill:none;marker-end:url(#a)"/>
+<text x="915" y="372" class="s">рёбра: ссылки пунктов на разделы и документы · роли (РП, SS…)</text><text x="915" y="387" class="s">раздел → первый пункт · разъяснение службы качества → пункт</text>
+
+<!-- почта -->
+<text x="900" y="440" class="h">Служба качества (почта)</text>
+<rect x="900" y="453" width="440" height="110" rx="8" class="mail"/>
+<text x="914" y="476" class="t">SMTP: письмо на адрес службы качества, сотрудник в копии</text>
+<text x="914" y="500" class="t">«Ответить всем» из обычной почты</text>
+<text x="914" y="524" class="t">IMAP: агент забирает ответ → kb_answers + ребро к пункту</text>
+<text x="914" y="548" class="s">кейс 3: следующий такой вопрос — ответ «Практика применения»</text>
+<path d="M800 610 L898 520" class="ln"/><path d="M898 535 L852 450" class="ln"/>
+<text x="900" y="680" class="s">Проверка качества: 18 контрольных вопросов — ответ, уточнение,</text><text x="900" y="695" class="s">нет в регламентах, вне темы, синонимы ролей, английский (eval/run_eval.py)</text>
+</svg></body></html>

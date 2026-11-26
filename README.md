@@ -25,6 +25,8 @@ PostgreSQL + pgvector. Внешних API нет: регламенты и воп
 
 ## Архитектура
 
+![Архитектура](docs/architecture.png)
+
 ```
 Браузер ─HTTPS─> Caddy (VPS) ─reverse SSH-туннель─> FastAPI (app/) на сервере в контуре
                                                      ├─ llama-server: Qwen3-30B-A3B (чат), bge-m3 (эмбеддинги)
