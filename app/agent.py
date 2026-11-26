@@ -12,7 +12,7 @@ import time
 import uuid
 
 from . import config, db, llm, mailbox, search
-from .ingest import ROLES
+from .ingest import ROLES, ROLE_SYNONYMS
 
 GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())
 MAX_CLARIFY = 2
@@ -86,6 +86,9 @@ def with_abbreviations(text: str) -> str | None:
         words = name.lower().split()
         pat = r"(?<![а-яё])" + r"\s+".join(w[:max(4, len(w) - 2)] + r"[а-яё-]*" for w in words)
         out = re.sub(pat, abbr, out, flags=re.I)
+    for abbr, syns in ROLE_SYNONYMS.items():   # проджект-менеджер, project manager, PM → РП
+        for syn in sorted(syns, key=len, reverse=True):
+            out = re.sub(rf"(?<![\w-]){re.escape(syn)}[а-яё]*(?![\w-])", abbr, out, flags=re.I)
     return out if out != text else None
 
 
