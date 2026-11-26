@@ -152,8 +152,9 @@ RERANK_STOP = {"дирек", "делат", "котор", "нужно", "можн
 
 
 def content_stems(s: str) -> set[str]:
-    """Основы смысловых слов (первые 5 букв слов от 5 букв) — для сверки «объекта» вопроса с пунктом."""
-    return {w[:5] for w in norm(s).split() if len(w) >= 5} - RERANK_STOP
+    """Основы смысловых слов (первые 4 буквы слов от 5 букв: «отвечает» и «ответа» — одна основа) —
+    для сверки «объекта» вопроса с пунктом."""
+    return {w[:4] for w in norm(s).split() if len(w) >= 5} - {x[:4] for x in RERANK_STOP}
 
 
 def rerank(question: str, hits: list[dict]) -> list[dict]:
@@ -162,7 +163,7 @@ def rerank(question: str, hits: list[dict]) -> list[dict]:
     проекта» был 5-м и не попадал в ответ, а «SS … сообщает АМ и TSS» из пресейла — 1-м)."""
     qs = content_stems(question)
     for h in hits:
-        h["rank_score"] = (h.get("score") or 0) + 0.005 * len(qs & content_stems(h["text"]))
+        h["rank_score"] = (h.get("score") or 0) + 0.01 * len(qs & content_stems(h["text"]))  # замер 27.11: S3 5→2, 7 других без изменений
     return sorted(hits, key=lambda h: -h["rank_score"])
 
 
