@@ -19,6 +19,8 @@ TAG = re.compile(r"\[Регламенты #(\d+)\]")
 # Промежуточный ответ («Переадресовано в отдел кадров…», «не по адресу») — не разъяснение: в базу не кладём,
 # запрос остаётся открытым (срок ответа продолжает идти) до окончательного ответа.
 REDIRECT = re.compile(r"^\W*переадресован", re.I)
+CONFIRM = re.compile(r"^\W*подтвержда", re.I)   # служба качества подтверждает ответ владельца процесса
+REVOKE = re.compile(r"^\W*отозва", re.I)        # служба качества отзывает разъяснение из базы
 QUOTE_HEADER = re.compile(r"^.{0,160}(писал|пишет|wrote).*:\s*$", re.I)
 
 
@@ -95,16 +97,44 @@ def poll_once() -> int:
             if not m or sender == config.MAIL_USER.lower():
                 continue
             answer = _text(msg)
-            if answer and REDIRECT.match(answer):
-                kb.note_redirect(int(m.group(1)), answer, sender)
+            if sender and sender == kb.ticket_employee_email(int(m.group(1))):
+                continue   # пишет сам сотрудник (например, «Спасибо» через «Ответить всем») — не разъяснение
+            tid = int(m.group(1))
+            from_quality = sender == config.QUALITY_EMAIL.lower()
+            try:
+                if not answer:
+                    continue
+                if REDIRECT.match(answer):
+                    kb.note_redirect(tid, answer, sender)
+                elif from_quality and REVOKE.match(answer):
+                    kb.revoke(tid, sender)                      # служба качества отзывает ошибочное разъяснение
+                elif from_quality and CONFIRM.match(answer):
+                    if kb.pending_answer(tid):
+                        kb.confirm_pending(tid, sender)         # служба качества подтвердила ответ владельца процесса
+                    else:
+                        continue                                # подтверждать нечего — «Подтверждаю» не разъяснение
+                elif from_quality:
+                    kb.add_answer(tid, answer, f"Служба качества ({sender})")
+                else:
+                    # Ответ владельца процесса (письмо переслала служба качества) — в базу только после подтверждения.
+                    kb.note_pending(tid, answer, sender)
+                    ask_confirmation(tid, answer, sender)
                 n += 1
-            elif answer:
-                try:
-                    kb.add_answer(int(m.group(1)), answer, f"Служба качества ({sender})")
-                    n += 1
-                except KeyError:
-                    pass
+            except KeyError:
+                pass
     return n
+
+
+def ask_confirmation(tid: int, answer: str, by: str) -> None:
+    """Просим службу качества подтвердить ответ владельца процесса перед добавлением в базу разъяснений."""
+    body = (f"Владелец процесса ({by}) ответил на запрос № {tid}:\n\n«{answer}»\n\n"
+            "Ответ добавится в базу разъяснений агента только после подтверждения службы качества.\n"
+            "Если ответ верный — ответьте на это письмо словом «Подтверждаю». Если нет — ответьте своим текстом "
+            "(он попадёт в базу вместо ответа владельца процесса).\n\nИИ-агент по регламентам")
+    try:
+        send(config.QUALITY_EMAIL, f"[Регламенты #{tid}] Ответ владельца процесса — на подтверждение", body)
+    except Exception as e:
+        print(f"[mailbox] подтверждение #{tid} не отправлено: {type(e).__name__}", flush=True)
 
 
 def start_poller(interval: int = 30):

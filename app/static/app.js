@@ -47,9 +47,11 @@ async function ask(text) {
       let i; while ((i = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === "step") stepsEl.insertAdjacentHTML("beforeend", stepHtml(ev));
+        if (ev.type === "step") { stepsEl.insertAdjacentHTML("beforeend", stepHtml(ev));
+          // Модель сначала выписывает дословные цитаты, потом пишет ответ — показываем это, а не пустой курсор.
+          if (ev.tool === "answer") box.querySelector(".res").innerHTML = `<span class="badge answer">Выписываю дословные цитаты из пунктов…</span>`; }
         else if (ev.type === "sources") renderSources(box.querySelector(".src"), ev);
-        else if (ev.type === "partial") box.querySelector(".res").innerHTML = `<span class="badge answer">Формулирую ответ…</span><div class="answer-text">${esc(ev.answer)}<span class="caret">▍</span></div>`;
+        else if (ev.type === "partial") box.querySelector(".res").innerHTML = `<span class="badge answer">Черновик — проверяю цитаты…</span><div class="answer-text">${esc(ev.answer)}<span class="caret">▍</span></div>`;
         else if (ev.type === "result") renderResult(box.querySelector(".res"), ev);
         else if (ev.type === "error") box.querySelector(".res").innerHTML = `<span class="badge escalated">Ошибка</span> ${esc(ev.text)}`;
         box.scrollIntoView({block: "end"});
@@ -128,6 +130,7 @@ async function loadOpenCount() {
 async function loadQuality() {
   if (!docsCache.length) docsCache = await (await fetch("/api/docs")).json();
   const t = await (await fetch("/api/tickets")).json();
+  const S = await (await fetch("/api/settings")).json();
   const opts = `<option value="">— привязать к регламенту —</option>` + docsCache.map(d => `<option value="${d.id}">${esc(d.title)}</option>`).join("");
   const nOpen = t.filter(x => x.status === "open").length, nOver = t.filter(x => x.overdue).length;
   const summary = `<div class="sla">Ждут ответа: <b>${nOpen}</b>${nOver ? ` · <span class="over">просрочено: <b>${nOver}</b></span>` : " · просроченных нет"}</div>`;
@@ -135,8 +138,9 @@ async function loadQuality() {
     <span class="st ${x.status}">Запрос № ${x.id} · ${fmt(x.created_at)} · ${esc(x.user_name)}${x.department ? " · " + esc(x.department) : ""} · ${x.status === "open" ? (x.overdue ? `<b class="over">ПРОСРОЧЕН — срок ответа был ${fmt(x.due_at)}</b>` : "открыт, ответ до " + fmt(x.due_at)) : "отвечен " + fmt(x.answered_at)}</span>
     <div><b>${esc(x.question)}</b></div>
     ${x.status === "open" && x.context && x.context.redirect_note ? `<div class="hint">Переадресовано (${esc(x.context.redirect_by || "")}): ${esc(x.context.redirect_note)} — ждём окончательного ответа</div>` : ""}
+    ${x.status === "open" && x.context && x.context.pending_answer ? `<div class="hint over">Ответ владельца процесса (${esc(x.context.pending_by || "")}) на подтверждении службы качества: ${esc(x.context.pending_answer)}</div>` : ""}
     <details><summary>Письмо на ${esc(x.mail_to)}</summary><pre>${esc(x.mail_body)}</pre></details>
-    ${x.status === "open" ? `<textarea placeholder="Ответ службы качества (уйдёт сотруднику и в базу знаний агента)"></textarea>
+    ${x.status === "open" && !S.web_answer ? `<div class="hint">Ответ службы качества — письмом («Ответить всем»): агент заберёт его из почты сам.</div>` : x.status === "open" ? `<textarea placeholder="Ответ службы качества (уйдёт сотруднику и в базу знаний агента)"></textarea>
       <div><select>${opts}</select><input class="cl" placeholder="пункт, напр. 2.3" size="10">
       <label><input type="checkbox" class="kb" checked> добавить в базу знаний</label></div><button>Ответить</button>`
       : `<div><b>Ответ (${esc(x.answered_by)}):</b> ${esc(x.answer)}</div>`}</div>`).join("") : `<div class="hint">Запросов нет</div>`;

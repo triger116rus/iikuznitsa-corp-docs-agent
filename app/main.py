@@ -89,11 +89,18 @@ def tickets(user_name: str | None = None):
 @app.post("/api/tickets/{tid}/answer")
 def answer_ticket(tid: int, req: TicketAnswer):
     """Запасной путь кейса 3 (основной — ответ письмом, см. mailbox.py): ответ службы качества → база разъяснений."""
+    if not config.WEB_ANSWER:
+        raise HTTPException(403, "на этом стенде служба качества отвечает только письмом")
     try:
         kb_id = kb.add_answer(tid, req.answer, req.answered_by, req.doc_id, req.clause_no, req.add_to_kb)
     except KeyError:
         raise HTTPException(404, "нет такого запроса")
     return {"ok": True, "kb_answer_id": kb_id}
+
+
+@app.get("/api/settings")
+def settings():
+    return {"web_answer": config.WEB_ANSWER, "sla_hours": config.ANSWER_SLA_HOURS}
 
 
 @app.post("/api/mail/poll")
@@ -201,7 +208,13 @@ def report(req: Report):
                            VALUES (%s,%s,%s,%s,%s) RETURNING id""",
                         (req.user_name, "Несоответствие: " + req.text, json.dumps({"type": "inconsistency", "query_id": req.query_id}),
                          agent.config.QUALITY_EMAIL, body)).fetchone()["id"]
-    return {"ok": True, "ticket_id": tid}
+        subject = f"[Регламенты #{tid}] Сообщение о несоответствии в регламентах"
+        try:
+            sent = mailbox.send(config.QUALITY_EMAIL, subject, body + "\n\nИИ-агент по регламентам")
+        except Exception:
+            sent = False
+        c.execute("UPDATE tickets SET context = context || %s WHERE id=%s", (json.dumps({"sent": sent}), tid))
+    return {"ok": True, "ticket_id": tid, "mail_sent": sent}
 
 
 @app.post("/api/feedback")
