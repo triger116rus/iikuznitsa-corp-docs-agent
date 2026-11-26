@@ -67,6 +67,8 @@ ANSWER_SCHEMA = {
     "required": ["citations", "answer", "status"],
 }
 
+PARTIAL_ANSWER = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)')
+
 OUT_OF_SCOPE = ("Этот вопрос не касается корпоративной базы регламентов, поэтому ответ на него я не даю. "
                 "Обратитесь, пожалуйста, к своему руководителю.")
 
@@ -138,6 +140,14 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     department = department or detect_department(question + " " + " ".join(state.get("clarifications", [])))
     full_q = question + ("\nУточнения пользователя: " + "; ".join(state["clarifications"]) if state.get("clarifications") else "")
     n_clar = len(state.get("clarifications", []))
+
+    # 0б. Мгновенно (1–2 с, без LLM): где в регламентах искать ответ — ссылки на пункты.
+    #     Заказчику важно: часто сотруднику нужно просто найти регламент и пункт.
+    quick = search.hybrid([full_q], department, k=4)
+    if quick:
+        yield {"type": "sources", "ms": int((time.time() - t0) * 1000),
+               "items": [{"label": fragment_label(h), "doc_id": h["doc_id"], "clause_no": h["clause_no"],
+                          "snippet": h["text"][:160]} for h in quick]}
 
     # 1. Разбор вопроса и план поиска (вызов LLM № 1).
     yield step("Разбираю вопрос и составляю план поиска", tool="plan")
@@ -213,8 +223,16 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
             "(«В <подразделение>: …»), каждое — со своей цитатой. Уточняющих вопросов не задавай." if all_variants else "")
     if n_clar >= MAX_CLARIFY:
         task += "\nЛимит уточнений исчерпан: уточняющих вопросов больше не задавай (status только answer или not_found)."
-    out = llm.chat_json(SYS_ANSWER, f"Вопрос: {full_q}{task}\n\nФрагменты:\n{ctx}", usage, max_tokens=400,
-                        schema=ANSWER_SCHEMA, slot=1)
+    out, shown = {}, ""
+    for kind, val in llm.stream_json(SYS_ANSWER, f"Вопрос: {full_q}{task}\n\nФрагменты:\n{ctx}", usage, max_tokens=400,
+                                     schema=ANSWER_SCHEMA, slot=1):
+        if kind == "done":
+            out = val
+            continue
+        m = PARTIAL_ANSWER.search(val)
+        if m and len(m.group(1)) - len(shown) >= 12:  # текст ответа — по мере генерации
+            shown = m.group(1)
+            yield {"type": "partial", "answer": shown.replace("\\n", " ").replace('\\"', '"')}
 
     # 7. Проверка кодом: цитаты дословно есть во фрагментах, ссылки на существующие фрагменты.
     status = out.get("status", "not_found")

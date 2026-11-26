@@ -70,3 +70,40 @@ def embed(texts: list[str]) -> list[list[float]]:
         r.raise_for_status()
         out.extend(d["embedding"] for d in sorted(r.json()["data"], key=lambda d: d["index"]))
     return out
+
+
+def stream_json(system: str, user: str, usage: Usage | None = None, max_tokens: int = 400, schema: dict | None = None,
+                slot: int | None = None):
+    """То же, что chat_json, но потоком: выдаёт ("delta", накопленный_текст) по мере генерации и ("done", dict).
+    Нужен, чтобы сотрудник видел ответ сразу, а не после окончания генерации."""
+    body = {
+        "model": config.LLM_MODEL,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": 0, "max_tokens": max_tokens, "stream": True, "stream_options": {"include_usage": True},
+        "chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": True,
+        "response_format": ({"type": "json_schema", "json_schema": {"name": "out", "schema": schema}} if schema
+                            else {"type": "json_object"}),
+    }
+    if slot is not None:
+        body["id_slot"] = slot
+    t0 = time.time()
+    text, u = "", {}
+    with _client.stream("POST", config.LLM_URL + "/v1/chat/completions", json=body) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                continue
+            d = json.loads(line[6:])
+            if d.get("usage"):
+                u = d["usage"]
+            for ch in d.get("choices", []):
+                piece = (ch.get("delta") or {}).get("content")
+                if piece:
+                    text += piece
+                    yield "delta", text
+    if usage is not None:
+        usage.calls += 1
+        usage.tokens_in += u.get("prompt_tokens", 0)
+        usage.tokens_out += u.get("completion_tokens", 0)
+        usage.ms += int((time.time() - t0) * 1000)
+    yield "done", parse_json(text)

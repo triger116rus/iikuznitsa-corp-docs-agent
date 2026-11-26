@@ -34,7 +34,7 @@ async function ask(text) {
   if (!q || busy) return;
   busy = true; $("#sendBtn").disabled = true; $("#q").value = ""; $("#examples").style.display = "none";
   addMsg("user", esc(q));
-  const box = addMsg("bot", `<div class="steps"><div><span class="spin"></span>Агент работает…</div></div><div class="res"></div>`);
+  const box = addMsg("bot", `<div class="src"></div><div class="steps"><div><span class="spin"></span>Агент работает…</div></div><div class="res"></div>`);
   const stepsEl = box.querySelector(".steps"); stepsEl.innerHTML = "";
   try {
     const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"},
@@ -47,6 +47,8 @@ async function ask(text) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
         if (ev.type === "step") stepsEl.insertAdjacentHTML("beforeend", stepHtml(ev));
+        else if (ev.type === "sources") renderSources(box.querySelector(".src"), ev);
+        else if (ev.type === "partial") box.querySelector(".res").innerHTML = `<span class="badge answer">Формулирую ответ…</span><div class="answer-text">${esc(ev.answer)}<span class="caret">▍</span></div>`;
         else if (ev.type === "result") renderResult(box.querySelector(".res"), ev);
         else if (ev.type === "error") box.querySelector(".res").innerHTML = `<span class="badge escalated">Ошибка</span> ${esc(ev.text)}`;
         box.scrollIntoView({block: "end"});
@@ -58,6 +60,12 @@ $("#userEmail").onchange = () => localStorage.setItem("userEmail", $("#userEmail
 $("#pollMail").onclick = async () => { const r = await (await fetch("/api/mail/poll", {method: "POST"})).json(); loadQuality(); loadOpenCount();
   $("#pollMail").textContent = `Проверить почту сейчас (обработано писем: ${r.processed})`; };
 loadMyTickets(); loadOpenCount();
+}
+
+function renderSources(el, ev) {
+  el.innerHTML = `<div class="srcbox"><b>Где искать в регламентах (найдено за ${(ev.ms / 1000).toFixed(1)} с):</b>` +
+    ev.items.map(i => `<div class="srcitem" data-doc="${i.doc_id}" data-clause="${esc(i.clause_no || "")}">↗ ${esc(i.label)}<small>${esc(i.snippet)}…</small></div>`).join("") + "</div>";
+  el.querySelectorAll(".srcitem").forEach(x => x.onclick = () => openDoc(+x.dataset.doc, x.dataset.clause));
 }
 
 function stepHtml(ev) {

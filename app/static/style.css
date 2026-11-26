@@ -60,3 +60,6 @@ th { color:var(--mute); font-weight:600; font-size:12.5px; }
 .badge.out_of_scope { background:#eeeef2; color:var(--mute); }
 .caveat { background:#fff4d6; border-radius:8px; padding:6px 10px; margin:6px 0; font-size:13.5px; }
 #pollMail { padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; }
+.srcbox { font-size:13px; background:#f3f6ff; border-radius:8px; padding:8px 10px; margin-bottom:8px; }
+.srcitem { cursor:pointer; color:#1d4fa8; margin-top:4px; } .srcitem small { display:block; color:var(--mute); }
+.caret { animation: blink 1s steps(1) infinite; } @keyframes blink { 50% { opacity:0; } }
