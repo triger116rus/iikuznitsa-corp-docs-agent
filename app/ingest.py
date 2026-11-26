@@ -41,8 +41,8 @@ EXTERNAL_REF = re.compile(
     r"((?:процесс\w*|процедур\w*)\s+«[^»]{3,80}»?"
     r"|(?:регламент\w*|инструкци\w*|положени\w*|политик\w*)\s+(?!Заказчика)[а-яё][а-яё ]{3,60}"
     r"|(?:процедур\w*)\s+(?:контроля|проверки|проверок|внутренней|старта)\s[а-яё ]{3,50}"
-    r"|(?:матриц\w*)\s+(?:ответственности|документооборота|коммуникаций|рисков))")
-REF_STOP = re.compile(r"\s(?:и|в|на|по|с|для|при|после|до|от|–|-|является|выполняются|может|под|понимаются)\s")
+    r"|(?:матриц\w*)\s+(?:ответственности|документооборота|коммуникаций|рисков))", re.I)
+REF_STOP = re.compile(r"\s(?:и|в|на|для|при|после|до|от|–|-|является|выполняются|может|под|понимаются)\s")
 REF_NOT_DOC = re.compile(r"^(?:регламент\w*|инструкци\w*)\s+(?:пользователя|по|под)$|^регламент\w*$", re.I)
 
 
@@ -183,7 +183,7 @@ def build_links(c, loaded, roles):
                 if REF_NOT_DOC.match(ref) or len(ref.split()) < 2:
                     continue
                 hit = c.execute("SELECT id, similarity(title,%s) s FROM documents ORDER BY s DESC LIMIT 1", (ref,)).fetchone()
-                dst_doc = hit["id"] if hit and hit["s"] > 0.35 and hit["id"] != doc_id else None
+                dst_doc = hit["id"] if hit and hit["s"] > 0.5 and hit["id"] != doc_id else None
                 c.execute("INSERT INTO doc_links(src_doc,src_chunk,kind,dst_doc,dst_node,dst_ref_text,evidence) VALUES (%s,%s,'references',%s,%s,%s,%s)",
                           (doc_id, ch["id"], dst_doc, None if dst_doc else "doc:" + node_key(ref), ref, t[max(0, m.start() - 60): m.end() + 20]))
                 n_ext += 1
@@ -198,7 +198,20 @@ def build_links(c, loaded, roles):
           + ", ".join(f"{k}={v}" for k, v in sorted(roles.items())))
 
 
+def rebuild_links():
+    """Пересборка графа по уже загруженным пунктам (без повторного извлечения текста и эмбеддингов)."""
+    with db.conn() as c:
+        loaded = []
+        for d in c.execute("SELECT id, title FROM documents ORDER BY id").fetchall():
+            chunks = c.execute("SELECT id, clause_no, section, text FROM chunks WHERE doc_id=%s ORDER BY ord", (d["id"],)).fetchall()
+            loaded.append((d["id"], d["title"], [dict(ch) for ch in chunks]))
+        build_links(c, loaded, ROLES)
+
+
 if __name__ == "__main__":
+    if "--links" in sys.argv:
+        rebuild_links()
+        sys.exit(0)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     files = []
     for a in args:
