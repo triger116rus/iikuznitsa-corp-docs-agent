@@ -46,6 +46,11 @@ def main():
         cited = [c.get("clause_no") for c in final.get("citations", []) if c.get("kind") == "chunk"]
         ok_clause = ((not q.get("clauses")) or any(c in q["clauses"] for c in cited)) and \
             (not q.get("kb") or any(c.get("kind") == "kb" for c in final.get("citations", [])))
+        # Проверка текста ответа (ревью v8: S3/T14 — верная цитата, искажённый вывод): must — все подстроки есть,
+        # forbid — ни одной нет (без учёта регистра).
+        text = (final.get("answer") or "").lower()
+        ok_text = all(s.lower() in text for s in q.get("must", [])) and not any(s.lower() in text for s in q.get("forbid", []))
+        ok_clause = ok_clause and ok_text
         hallucination = q["expect"] in ("escalated", "out_of_scope") and final.get("status") == "answer"             and not final.get("also_escalated")
         rows.append({"id": q["id"], "case": q["case"], "q": q["q"], "first": status, "final": final.get("status"),
                      "ok": bool(ok_first and ok_final and ok_clause), "ok_clause": ok_clause, "cited": cited,

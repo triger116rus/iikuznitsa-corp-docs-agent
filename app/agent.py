@@ -6,6 +6,7 @@ run() — генератор событий для интерфейса: {"type"
 не знает подразделение — все варианты с источниками; спорный случай — ответ с оговоркой; нет ответа — письмо
 в службу качества с сотрудником в копии; вопрос не о регламентах — «обратитесь к руководителю».
 """
+import difflib
 import json
 import re
 import time
@@ -36,6 +37,7 @@ DEP_ALIASES = {
 }
 ALL_VARIANTS = "Не знаю — покажите все варианты"
 OTHER_DEP = "Другое подразделение — в службу качества"
+ABSOLUTE_WORDS = ("только", "всегда", "никогда", "исключительно", "единственн")
 ALL_RE = re.compile(r"не знаю|все вариант|несколько|комплексн|обе|оба|все подразделени", re.I)
 
 SYS_PLAN = """Ты планируешь поиск по внутренним регламентам компании (пресейл и проектная деятельность подразделений).
@@ -75,6 +77,8 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
 6. Сотрудники часто спрашивают с неверной посылкой (не та роль, не тот срок, не тот этап). Не соглашайся с ней:
    ответь, как написано в регламенте, и мягко поправь («Это делает не АМ, а SS: …»). На вопрос «кто делает X» отвечай по фрагменту,
    где назван исполнитель именно действия X (тот, кто X выполняет), а не фрагменту, где X лишь упоминается.
+8. Если в пункте перечислены условия или варианты («при одном из условий», список) — назови их все, не сокращай
+   до одного. Не добавляй «только», «всегда», «никогда», если этих слов нет во фрагменте.
 7. Если разъяснение службы качества расходится с пунктом регламента — приоритет у разъяснения (регламент может быть
    на актуализации): ответь по разъяснению, а в caveat одной фразой укажи, что пункт регламента пока говорит иначе.
 Сокращения в регламентах: {GLOSSARY}. Вопрос и фрагмент могут называть роль полностью или сокращением — это одно и то же.
@@ -139,8 +143,47 @@ def with_abbreviations(text: str) -> str | None:
 
 def norm(s: str) -> str:
     s = s.lower().replace("ё", "е")
-    s = re.sub(r"[«»\"'“”„()\[\]—–\-:;,.!?]", " ", s)
+    s = re.sub(r"[«»\"'“”„()\[\]—–\-:;,.!?/]", " ", s)
     return " ".join(s.split())
+
+
+RERANK_STOP = {"дирек", "делат", "котор", "нужно", "можно", "какие", "какой", "долже", "после", "через", "когда",
+               "чтобы", "этого", "между", "также", "каким", "какая"}
+
+
+def content_stems(s: str) -> set[str]:
+    """Основы смысловых слов (первые 5 букв слов от 5 букв) — для сверки «объекта» вопроса с пунктом."""
+    return {w[:5] for w in norm(s).split() if len(w) >= 5} - RERANK_STOP
+
+
+def rerank(question: str, hits: list[dict]) -> list[dict]:
+    """Поднимаем пункты, где есть смысловые слова самого вопроса («карточка проекта», «отвечает»), над пунктами,
+    совпавшими только по роли/подразделению (eval v8, S3: п. 2.3 «ответа от SS более 5 рабочих дней… карточка
+    проекта» был 5-м и не попадал в ответ, а «SS … сообщает АМ и TSS» из пресейла — 1-м)."""
+    qs = content_stems(question)
+    for h in hits:
+        h["rank_score"] = (h.get("score") or 0) + 0.005 * len(qs & content_stems(h["text"]))
+    return sorted(hits, key=lambda h: -h["rank_score"])
+
+
+def quote_ok(quote: str, text: str) -> bool:
+    """Цитата есть во фрагменте: дословно — или с другими окончаниями слов (модель ставит «Ресурс-менеджер»
+    вместо «Ресурс-менеджеру», eval v8/v9 A5). Сравнение по основам (первые 5 букв): не меньше 85% слов цитаты
+    должны идти во фрагменте в том же порядке и почти подряд — выдуманная фраза так не пройдёт."""
+    nq, nt = norm(quote), norm(text)
+    if len(nq) < 8:
+        return False
+    if nq in nt:
+        return True
+    qs, ts = [w[:5] for w in nq.split()], [w[:5] for w in nt.split()]
+    if len(qs) < 4:
+        return False
+    blocks = [b for b in difflib.SequenceMatcher(None, qs, ts, autojunk=False).get_matching_blocks() if b.size]
+    if not blocks:
+        return False
+    matched = sum(b.size for b in blocks)
+    span = blocks[-1].b + blocks[-1].size - blocks[0].b
+    return matched / len(qs) >= 0.85 and span <= len(qs) * 1.5
 
 
 def detect_department(text: str) -> str | None:
@@ -259,7 +302,7 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         for dep in state.get("variants", []):
             hits += search.hybrid(queries, dep, k=2)
     else:
-        hits = search.hybrid(queries, department, k=config.TOP_K)
+        hits = rerank(question, search.hybrid(queries, department, k=config.TOP_K + 4))[:config.TOP_K]
     kb = search.kb_search(full_q, department)
     yield step(f"Нашёл {len(hits)} пунктов в {len({h['doc_id'] for h in hits})} регламентах"
                + (f" и {len(kb)} разъяснений службы качества" if kb else ""), tool="search",
@@ -341,7 +384,7 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     for cit in out.get("citations", []):
         e = evidence.get(str(cit.get("id", "")).strip("[] "))
         quote = cit.get("quote", "")
-        if e and len(norm(quote)) >= 8 and norm(quote) in norm(e["text"]):
+        if e and quote_ok(quote, e["text"]):
             valid.append({"id": cit["id"], "quote": quote, "source": fragment_label(e) if e["kind"] == "chunk"
                           else f"Практика применения: разъяснение службы качества (запрос № {e['ticket_id']})",
                           "doc_id": e.get("doc_id"), "clause_no": e.get("clause_no"), "kind": e["kind"]})
@@ -361,6 +404,14 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
             note = "В регламенте не указано: " + ", ".join(missing) + " — это условие из вопроса, регламент его не подтверждает."
             out["caveat"] = (out.get("caveat", "") + " " + note).strip()
             yield step(f"Проверка чисел кодом: в цитатах нет {', '.join(missing)} — добавил оговорку", tool="verify")
+        # Ограничивающие слова, которых нет в пунктах («только», «никогда»…), — признак сокращённого перечня условий
+        # (eval v8, T14: «нельзя, только при подписанном договоре», а в п. 9.1 — «одно из условий», их четыре).
+        ans_low, cited_low = out.get("answer", "").lower(), cited_text.lower()
+        absolute = [w for w in ABSOLUTE_WORDS if re.search(rf"\b{w}", ans_low) and w not in cited_low]
+        if absolute:
+            note = "Проверьте полный текст пункта: в регламенте может быть несколько условий или вариантов."
+            out["caveat"] = (out.get("caveat", "") + " " + note).strip()
+            yield step(f"Проверка кодом: в ответе «{', '.join(absolute)}», в пунктах этого нет — добавил оговорку", tool="verify")
     if status == "answer" and not valid:
         status = "not_found"
         yield step("Ответ не подтверждён дословными цитатами — недостоверный ответ не показываю", tool="verify")
