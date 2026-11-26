@@ -70,6 +70,8 @@ DB_DSN=dbname=corpdocs venv/bin/python -m app.ingest data/ --reset     # заг�
 venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+**Модель меняется настройкой**: агент работает с LLM через OpenAI-совместимый API (`LLM_URL`, `LLM_MODEL`) — можно подключить локальную LLM заказчика в его контуре без изменения кода. Глоссарий сокращений заказчика — `data/glossary.tsv` (СОКР<TAB>расшифровка; вне репозитория).
+
 Настройки — переменные окружения (`app/config.py`); почта службы качества — `MAIL_USER`, `MAIL_PASS`,
 `QUALITY_EMAIL`, `SMTP_HOST`, `IMAP_HOST` (без них письмо только формируется и показывается в интерфейсе).
 Служба systemd — `deploy/corpdocs-agent.service`. Пересборка графа без перезагрузки текста: `python -m app.ingest --links`.

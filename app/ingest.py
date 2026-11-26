@@ -14,6 +14,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from . import db, llm
+from .glossary import TERMS
 
 # Подразделения: шаблон в названии файла/документа → каноническое имя (область действия регламента).
 DEPARTMENTS = [
@@ -68,6 +69,10 @@ def expand_roles(text: str) -> str:
         syn = ", ".join(syns[:1] + [x for x in syns if x.isascii()][:2])   # русский разговорный + английский
         text = re.sub(rf"(?<![А-ЯЁA-Zа-яё]){re.escape(abbr)}(?![А-ЯЁA-Zа-яё])",
                       f"{name.lower()} ({abbr}{', ' + syn if syn else ''})", text)
+    for abbr, name in TERMS.items():   # прочие сокращения из глоссария заказчика: ТКП, РТЗ, ЗНП, ДИБ…
+        if abbr in ROLES:
+            continue
+        text = re.sub(rf"(?<![А-ЯЁA-Zа-яё(]){re.escape(abbr)}(?![А-ЯЁA-Zа-яё])", f"{name} ({abbr})", text)
     return text
 
 

@@ -13,14 +13,24 @@ import uuid
 
 from . import config, db, llm, mailbox, search
 from .ingest import ROLES, ROLE_SYNONYMS
+from .glossary import TERMS
 
-GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())
+GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())   # постоянная часть промпта (кэшируется)
+
+
+def terms_in(text: str) -> str:
+    """Расшифровки из глоссария заказчика только для сокращений, которые есть в найденных пунктах и вопросе."""
+    found = [f"{a} — {n}" for a, n in TERMS.items()
+             if a not in ROLES and re.search(rf"(?<![А-ЯЁA-Z]){re.escape(a)}(?![А-ЯЁA-Z])", text)]
+    return ("\nСокращения во фрагментах (глоссарий): " + "; ".join(found)) if found else ""
+
+
 MAX_CLARIFY = 2
 RELEVANCE_MIN = 0.56   # ниже — в регламентах нет близких пунктов (замер 26.11: ответы 0.57+, «отпуск» 0.49)
 AMBIGUITY_GAP = 0.05  # подразделения с близостью в пределах 0.05 от лучшей — ответ неоднозначен
 
 DEP_ALIASES = {
-    "Дирекция ИБ": r"\bИБ\b|информационн\w* безопасност|дирекци\w* иб",
+    "Дирекция ИБ": r"\bИБ\b|\bДИБ\b|информационн\w* безопасност|дирекци\w* иб",
     "ДБРЦТ": r"ДБРЦТ|бизнес-решени|цифров\w* трансформац",
     "Технологическая дирекция": r"тех\.?\s*дирекц|технологическ\w* дирекц|технической дирекц",
 }
@@ -89,6 +99,13 @@ def with_abbreviations(text: str) -> str | None:
         words = name.lower().split()
         pat = r"(?<![а-яё])" + r"\s+".join(w[:max(4, len(w) - 2)] + r"[а-яё-]*" for w in words)
         out = re.sub(pat, abbr, out, flags=re.I)
+    for abbr, name in sorted(TERMS.items(), key=lambda t: -len(t[1])):   # длинные названия первыми: ТКП раньше КП
+        if abbr in ROLES or len(name) < 6:
+            continue
+        words = re.sub(r"\(.*?\)", "", name).lower().split()
+        if words:
+            pat = r"(?<![а-яё])" + r"\s+".join(w[:max(4, len(w) - 2)] + r"[а-яё-]*" for w in words)
+            out = re.sub(pat, abbr, out, flags=re.I)
     for abbr, syns in ROLE_SYNONYMS.items():   # проджект-менеджер, project manager, PM → РП
         for syn in sorted(syns, key=len, reverse=True):
             out = re.sub(rf"(?<![\w-]){re.escape(syn)}[а-яё]*(?![\w-])", abbr, out, flags=re.I)
@@ -258,8 +275,8 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     if n_clar >= MAX_CLARIFY:
         task += "\nЛимит уточнений исчерпан: уточняющих вопросов больше не задавай (status только answer или not_found)."
     out, shown = {}, ""
-    for kind, val in llm.stream_json(SYS_ANSWER, f"Вопрос: {full_q}{task}\n\nФрагменты:\n{ctx}", usage, max_tokens=400,
-                                     schema=ANSWER_SCHEMA, slot=1):
+    for kind, val in llm.stream_json(SYS_ANSWER, f"Вопрос: {full_q}{task}{terms_in(full_q + ' ' + ctx)}\n\nФрагменты:\n{ctx}",
+                                     usage, max_tokens=400, schema=ANSWER_SCHEMA, slot=1):
         if kind == "done":
             out = val
             continue
