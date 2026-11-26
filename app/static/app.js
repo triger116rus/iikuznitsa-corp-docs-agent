@@ -153,12 +153,16 @@ async function loadQuality() {
 }
 
 async function openDoc(docId, clause) {
-  document.querySelector('nav button[data-tab="docs"]').click();
+  // Сначала готовим текст регламента, потом переключаем вкладку и сразу показываем пункт —
+  // без промежуточного кадра с графом в начале вкладки.
+  if (!docsCache.length) await loadDocs();
   const ch = await (await fetch("/api/docs/" + docId)).json();
   const d = docsCache.find(x => x.id === docId) || {title: "Документ"};
   $("#docView").innerHTML = `<h3>${esc(d.title)}</h3>` + ch.map(c => `<div class="cite ${c.clause_no === clause ? "hl" : ""}" id="cl-${esc(c.clause_no || c.id)}">
     <b>${esc(c.section || "")}</b>${esc(c.text)}</div>`).join("");
-  setTimeout(() => (document.getElementById("cl-" + clause) || $("#docView")).scrollIntoView({block: "center"}), 400);
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x.dataset.tab === "docs"));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === "docs"));
+  (document.getElementById("cl-" + clause) || $("#docView")).scrollIntoView({block: "center", behavior: "instant"});
 }
 
 async function loadDocs() {
