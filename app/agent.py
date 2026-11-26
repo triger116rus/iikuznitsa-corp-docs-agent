@@ -57,7 +57,9 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
    Только если фрагменты отвечают на САМ вопрос частично или регламенты противоречат друг другу — ответь по ним
    и в caveat одной фразой напиши оговорку: какой части ответа в регламенте нет. О том, что не спрашивали, не пиши.
 5. Сначала выпиши цитаты из фрагментов, затем ответ, затем status. Каждое утверждение подтверди цитатой:
-   id фрагмента и ДОСЛОВНАЯ фраза из него (5–12 слов, без изменений), 1–3 цитаты.
+   id фрагмента и ДОСЛОВНАЯ фраза из него (5–10 слов, без изменений), 1–2 цитаты.
+   Пиши кратко: ответ — 1–2 предложения; steps — только если вопрос «как сделать» (до 3 шагов), иначе пусто;
+   caveat — одна короткая фраза или пусто.
    Цитируй только фрагменты, которые прямо отвечают на вопрос. Числа, суммы, сроки и пороги из вопроса, которых
    нет во фрагментах, не подтверждай: ответь тем, что есть в регламенте, и в caveat скажи, что такого условия там нет.
 6. Сотрудники часто спрашивают с неверной посылкой (не та роль, не тот срок, не тот этап). Не соглашайся с ней:
@@ -70,11 +72,11 @@ ANSWER_SCHEMA = {
     # Порядок полей = порядок генерации: сначала дословные цитаты, затем ответ, решение (status) — последним.
     "type": "object",
     "properties": {
-        "citations": {"type": "array", "maxItems": 4, "items": {
+        "citations": {"type": "array", "maxItems": 3, "items": {
             "type": "object", "properties": {"id": {"type": "string"}, "quote": {"type": "string"}},
             "required": ["id", "quote"]}},
         "answer": {"type": "string"},
-        "steps": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "steps": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
         "caveat": {"type": "string"},
         "clarify_question": {"type": "string"},
         "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
@@ -276,7 +278,7 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         task += "\nЛимит уточнений исчерпан: уточняющих вопросов больше не задавай (status только answer или not_found)."
     out, shown = {}, ""
     for kind, val in llm.stream_json(SYS_ANSWER, f"Вопрос: {full_q}{task}{terms_in(full_q + ' ' + ctx)}\n\nФрагменты:\n{ctx}",
-                                     usage, max_tokens=400, schema=ANSWER_SCHEMA, slot=1):
+                                     usage, max_tokens=300, schema=ANSWER_SCHEMA, slot=1):
         if kind == "done":
             out = val
             continue
