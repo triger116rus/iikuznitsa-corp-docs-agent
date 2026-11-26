@@ -121,8 +121,11 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     yield step("Разбираю вопрос и составляю план поиска", tool="plan")
     plan = llm.chat_json(SYS_PLAN, full_q, usage, max_tokens=150, slot=0)
     subqueries = [q for q in plan.get("subqueries", []) if isinstance(q, str)][:3]
-    if plan.get("in_scope") is False:
-        result = finish_not_found(question, department, user_name, "вопрос вне регламентов компании", [], [], steps, usage)
+    if plan.get("in_scope") is False and not search.kb_search(full_q, department):
+        # Вне регламентов и нет разъяснения службы качества → сразу запрос в службу качества.
+        yield step("Вопрос вне регламентов, разъяснений службы качества по нему нет", tool="check")
+        result = finish_not_found(question, department, user_name, "вопрос вне действующих регламентов", [], [], steps, usage)
+        yield step(f"Создан запрос № {result['ticket_id']} в службу качества, письмо на {config.QUALITY_EMAIL}", tool="escalate")
         yield from finalize(dialog_id, {}, question, result, steps, usage, t0, user_name)
         return
     queries = [question] + subqueries
