@@ -38,7 +38,7 @@ async function ask(text) {
   const stepsEl = box.querySelector(".steps"); stepsEl.innerHTML = "";
   try {
     const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: q, dialog_id: dialogId, user_name: $("#userName").value})});
+      body: JSON.stringify({message: q, dialog_id: dialogId, user_name: $("#userName").value, user_email: $("#userEmail").value})});
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
     while (true) {
       const {value, done} = await reader.read(); if (done) break;
@@ -53,7 +53,11 @@ async function ask(text) {
       }
     }
   } catch (e) { box.querySelector(".res").textContent = "Ошибка соединения: " + e; }
-  busy = false; $("#sendBtn").disabled = false; $("#q").focus(); loadMyTickets(); loadOpenCount();
+  busy = false; $("#sendBtn").disabled = false; $("#q").focus(); $("#userEmail").value = localStorage.getItem("userEmail") || "";
+$("#userEmail").onchange = () => localStorage.setItem("userEmail", $("#userEmail").value);
+$("#pollMail").onclick = async () => { const r = await (await fetch("/api/mail/poll", {method: "POST"})).json(); loadQuality(); loadOpenCount();
+  $("#pollMail").textContent = `Проверить почту сейчас (обработано писем: ${r.processed})`; };
+loadMyTickets(); loadOpenCount();
 }
 
 function stepHtml(ev) {
@@ -66,8 +70,9 @@ function stepHtml(ev) {
 
 function renderResult(el, r) {
   dialogId = r.dialog_id;
-  const label = {answer: "Ответ по регламенту", clarify: "Нужно уточнение", escalated: "Передано в службу качества"}[r.status] || r.status;
+  const label = {answer: "Ответ по регламенту", clarify: "Нужно уточнение", escalated: "Письмо в службу качества", out_of_scope: "Вне регламентов"}[r.status] || r.status;
   let h = `<span class="badge ${r.status}">${label}</span><div class="answer-text">${esc(r.answer)}</div>`;
+  if (r.caveat) h += `<div class="caveat">Оговорка: ${esc(r.caveat)}</div>`;
   if (r.steps && r.steps.length) h += `<ol class="steps-list">${r.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>`;
   if (r.options && r.options.length) h += `<div class="options">${r.options.map(o => `<button>${esc(o)}</button>`).join("")}</div>`;
   for (const c of r.citations || [])
@@ -86,7 +91,11 @@ function renderResult(el, r) {
     const res = await (await fetch("/api/report", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({text, query_id: r.query_id, user_name: $("#userName").value})})).json();
     el.querySelector(".rep").parentElement.textContent = `передано в службу качества, запрос № ${res.ticket_id}`;
-    loadMyTickets(); loadOpenCount();
+    $("#userEmail").value = localStorage.getItem("userEmail") || "";
+$("#userEmail").onchange = () => localStorage.setItem("userEmail", $("#userEmail").value);
+$("#pollMail").onclick = async () => { const r = await (await fetch("/api/mail/poll", {method: "POST"})).json(); loadQuality(); loadOpenCount();
+  $("#pollMail").textContent = `Проверить почту сейчас (обработано писем: ${r.processed})`; };
+loadMyTickets(); loadOpenCount();
   };
   el.querySelectorAll(".fb button[data-v]").forEach(b => b.onclick = async () => {
     await fetch("/api/feedback", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({query_id: r.query_id, value: b.dataset.v})});
@@ -194,10 +203,17 @@ async function loadStats() {
     <div class="kpi"><b>${m.avg_ms ? (m.avg_ms / 1000).toFixed(1) + " с" : "—"}</b><span>среднее время ответа</span></div>
     <div class="kpi"><b>${m.avg_in ?? "—"} → ${m.avg_out ?? "—"}</b><span>токенов на шаг (вход → выход)</span></div>
     <div class="kpi"><b>${m.avg_calls ?? "—"}</b><span>вызовов LLM на вопрос</span></div>
-    <div class="kpi"><b>${s.tickets.open} / ${s.tickets.total}</b><span>запросов открыто / всего</span></div></div>
+    <div class="kpi"><b>${m.out_of_scope}</b><span>вне регламентов</span></div>
+    <div class="kpi"><b>${s.tickets.open} / ${s.tickets.total}</b><span>писем в службу качества: ждут ответа / всего</span></div></div>
+    ${s.hot.length ? `<h3>Частые вопросы, закрытые разъяснениями службы качества — кандидаты на внесение в регламент</h3><table><tr><th>Вопрос</th><th>Разъяснение</th><th>Регламент</th><th>Использовано раз</th></tr>` +
+      s.hot.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.title || "—")}</td><td>${x.uses}</td></tr>`).join("") + "</table><h3>Журнал вопросов</h3>" : ""}
     <table><tr><th>Время</th><th>Сотрудник</th><th>Вопрос</th><th>Итог</th><th>с</th><th>Токены</th><th>Оценка</th></tr>` +
     s.last.map(q => `<tr><td>${fmt(q.ts)}</td><td>${esc(q.user_name)}</td><td>${esc(q.question)}</td><td>${q.outcome}</td>
       <td>${(q.latency_ms / 1000).toFixed(1)}</td><td>${q.tokens_in}→${q.tokens_out}</td><td>${q.feedback ?? ""}</td></tr>`).join("") + "</table>";
 }
 
+$("#userEmail").value = localStorage.getItem("userEmail") || "";
+$("#userEmail").onchange = () => localStorage.setItem("userEmail", $("#userEmail").value);
+$("#pollMail").onclick = async () => { const r = await (await fetch("/api/mail/poll", {method: "POST"})).json(); loadQuality(); loadOpenCount();
+  $("#pollMail").textContent = `Проверить почту сейчас (обработано писем: ${r.processed})`; };
 loadMyTickets(); loadOpenCount();

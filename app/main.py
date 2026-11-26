@@ -2,6 +2,7 @@
 реестр документов, граф связей, аналитика."""
 import json
 import pathlib
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -9,9 +10,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import iterate_in_threadpool
 
-from . import agent, db, llm
+from . import agent, db, kb, mailbox
 
-app = FastAPI(title="ИИ-агент по корпоративным регламентам")
+@asynccontextmanager
+async def lifespan(_app):
+    mailbox.start_poller()  # фоновый опрос почты службы качества (если настроен IMAP)
+    yield
+
+
+app = FastAPI(title="ИИ-агент по корпоративным регламентам", lifespan=lifespan)
 STATIC = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -20,6 +27,7 @@ class Ask(BaseModel):
     message: str
     dialog_id: str | None = None
     user_name: str = "Сотрудник"
+    user_email: str | None = None
 
 
 class TicketAnswer(BaseModel):
@@ -57,7 +65,7 @@ def healthz():
 async def ask(req: Ask):
     def gen():
         try:
-            for ev in agent.run(req.message.strip(), req.dialog_id, req.user_name):
+            for ev in agent.run(req.message.strip(), req.dialog_id, req.user_name, (req.user_email or "").strip() or None):
                 yield json.dumps(ev, ensure_ascii=False, default=str) + "\n"
         except Exception as e:  # ошибка — тоже событие, интерфейс покажет её
             yield json.dumps({"type": "error", "text": f"{type(e).__name__}: {e}"}, ensure_ascii=False) + "\n"
@@ -76,31 +84,18 @@ def tickets(user_name: str | None = None):
 
 @app.post("/api/tickets/{tid}/answer")
 def answer_ticket(tid: int, req: TicketAnswer):
-    """Кейс 3: служба качества отвечает → ответ уходит пользователю и пополняет базу знаний агента
-    (разъяснение с эмбеддингом + ребро графа explains к пункту регламента)."""
-    with db.conn() as c:
-        t = c.execute("SELECT * FROM tickets WHERE id=%s", (tid,)).fetchone()
-        if not t:
-            raise HTTPException(404, "нет такого запроса")
-        c.execute("UPDATE tickets SET status='answered', answer=%s, answered_by=%s, answered_at=now() WHERE id=%s",
-                  (req.answer, req.answered_by, tid))
-        kb_id = None
-        if req.add_to_kb:
-            v = llm.embed([f"{t['question']}\n{req.answer}"])[0]
-            dep = t["department"]
-            if req.doc_id:
-                dep = c.execute("SELECT department FROM documents WHERE id=%s", (req.doc_id,)).fetchone()["department"]
-            kb_id = c.execute("""INSERT INTO kb_answers(ticket_id,question,answer,doc_id,clause_no,department,approved_by,embedding)
-                                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                              (tid, t["question"], req.answer, req.doc_id, req.clause_no, dep, req.answered_by, v)).fetchone()["id"]
-            dst = None
-            if req.doc_id and req.clause_no:
-                r = c.execute("SELECT id FROM chunks WHERE doc_id=%s AND clause_no=%s", (req.doc_id, req.clause_no)).fetchone()
-                dst = r["id"] if r else None
-            if req.doc_id:
-                c.execute("""INSERT INTO doc_links(src_answer,kind,dst_doc,dst_chunk,origin,evidence)
-                             VALUES (%s,'explains',%s,%s,'manual',%s)""", (kb_id, req.doc_id, dst, req.answer[:200]))
+    """Запасной путь кейса 3 (основной — ответ письмом, см. mailbox.py): ответ службы качества → база разъяснений."""
+    try:
+        kb_id = kb.add_answer(tid, req.answer, req.answered_by, req.doc_id, req.clause_no, req.add_to_kb)
+    except KeyError:
+        raise HTTPException(404, "нет такого запроса")
     return {"ok": True, "kb_answer_id": kb_id}
+
+
+@app.post("/api/mail/poll")
+def mail_poll():
+    """Забрать ответы службы качества из почты сейчас (иначе — фоновый опрос раз в 30 с)."""
+    return {"processed": mailbox.poll_once()}
 
 
 @app.get("/api/kb")
@@ -149,13 +144,19 @@ def stats():
                                 count(*) FILTER (WHERE outcome='answered') AS answered,
                                 count(*) FILTER (WHERE outcome='clarify') AS clarify,
                                 count(*) FILTER (WHERE outcome='escalated') AS escalated,
+                                count(*) FILTER (WHERE outcome='out_of_scope') AS out_of_scope,
                                 round(avg(latency_ms)) AS avg_ms, round(avg(tokens_in)) AS avg_in,
                                 round(avg(tokens_out)) AS avg_out, round(avg(llm_calls),1) AS avg_calls
                          FROM query_log""").fetchone()
         last = c.execute("""SELECT id, ts, user_name, question, outcome, latency_ms, tokens_in, tokens_out, llm_calls, feedback
                             FROM query_log ORDER BY id DESC LIMIT 30""").fetchall()
         tk = c.execute("SELECT count(*) FILTER (WHERE status='open') AS open, count(*) AS total FROM tickets").fetchone()
-    return {"summary": s, "last": last, "tickets": tk}
+        # Разъяснения, которые агент использует чаще всего, — кандидаты на внесение в регламент (инициатива бота).
+        hot = c.execute("""SELECT a.id, a.question, a.answer, d.title, count(*) AS uses
+                            FROM query_log q, jsonb_array_elements(q.citations) cit
+                            JOIN kb_answers a ON 'K' || a.id = cit->>'id' LEFT JOIN documents d ON d.id=a.doc_id
+                            WHERE q.outcome='answered' GROUP BY 1,2,3,4 ORDER BY uses DESC LIMIT 10""").fetchall()
+    return {"summary": s, "last": last, "tickets": tk, "hot": hot}
 
 
 @app.post("/api/report")

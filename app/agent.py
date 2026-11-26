@@ -1,28 +1,36 @@
-"""Агентный цикл: разбор вопроса → план поиска → поиск → обход графа → проверка однозначности →
-ответ строго по фрагментам → проверка цитат кодом → ответ / уточняющий вопрос / запрос в службу качества.
+"""Агентный цикл: разбор вопроса → план поиска → поиск → проверка однозначности → обход графа →
+ответ строго по фрагментам → проверка цитат кодом → ответ / уточняющий вопрос / письмо в службу качества.
 
 run() — генератор событий для интерфейса: {"type": "step", ...} по ходу работы и финальный {"type": "result", ...}.
+Требования заказчика (брифинг 26.11): не галлюцинировать; уточнять подразделение; не больше 2–3 уточнений;
+не знает подразделение — все варианты с источниками; спорный случай — ответ с оговоркой; нет ответа — письмо
+в службу качества с сотрудником в копии; вопрос не о регламентах — «обратитесь к руководителю».
 """
 import json
 import re
 import time
 import uuid
 
-from . import config, db, llm, search
-from .search import departments
+from . import config, db, llm, mailbox, search
 from .ingest import ROLES
 
 GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())
+MAX_CLARIFY = 2
+AMBIGUITY_GAP = 0.05  # подразделения с близостью в пределах 0.05 от лучшей — ответ неоднозначен
 
 DEP_ALIASES = {
     "Дирекция ИБ": r"\bИБ\b|информационн\w* безопасност|дирекци\w* иб",
     "ДБРЦТ": r"ДБРЦТ|бизнес-решени|цифров\w* трансформац",
     "Технологическая дирекция": r"тех\.?\s*дирекц|технологическ\w* дирекц|технической дирекц",
 }
+ALL_VARIANTS = "Не знаю — покажите все варианты"
+ALL_RE = re.compile(r"не знаю|все вариант|несколько|комплексн|обе|оба|все подразделени", re.I)
 
 SYS_PLAN = """Ты планируешь поиск по внутренним регламентам компании (пресейл и проектная деятельность подразделений).
 Верни только JSON: {"in_scope": true|false, "subqueries": ["...", "..."]}.
-in_scope=false — вопрос не о работе компании (погода, общие знания, личное).
+in_scope=false — вопрос НЕ о правилах и процессах компании: личная премия, зарплата, бонус за сделку, курсы валют,
+погода, новости, общие знания, болтовня. Любой вопрос о правилах и процессах компании (проекты, пресейл, договоры,
+отпуск, командировки, документы), даже если ответа в регламентах может не быть, — in_scope=true.
 subqueries — 1–3 короткие поисковые фразы на русском, переформулирующие вопрос терминами регламентов
 (роли: SS, АМ, ПА, РП, ГИП, Координатор департамента; объекты: карточка проекта, CRM, расчёт, ТКП, договор).
 Ничего не добавляй от себя."""
@@ -31,12 +39,14 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
 Правила:
 1. Используй только факты из фрагментов. Ничего не добавляй из общих знаний, не обобщай, не додумывай.
 2. Если во фрагментах ответа на вопрос нет — status="not_found".
-3. Если ответ зависит от условия, которого нет в вопросе (несколько разных сценариев/вариантов в регламенте),
+3. Если ответ зависит от условия, которого нет в вопросе (несколько разных сценариев в регламенте),
    и по вопросу нельзя выбрать один — status="clarify": задай ОДИН уточняющий вопрос и дай 2–4 варианта ответа.
-4. Иначе status="answer": краткий ответ (1–2 предложения) и, если уместно, шаги «что сделать».
-5. Сначала выпиши цитаты из фрагментов, относящиеся к вопросу, затем ответ, затем status.
-   Каждое утверждение подтверди цитатой: id фрагмента и ДОСЛОВНАЯ фраза из него (5–12 слов, без изменений), 1–2 цитаты.
-   Цитируй только фрагменты, которые прямо отвечают на вопрос; фрагменты о других ролях и процессах не используй.
+4. Иначе status="answer": ответ простым человеческим языком, без канцелярита и без искажения смысла, 1–3 предложения;
+   если уместно — шаги «что сделать». Если фрагменты отвечают на вопрос не полностью — всё равно ответь по ним
+   и в caveat кратко напиши оговорку: что в регламенте не сказано или требует проверки.
+5. Сначала выпиши цитаты из фрагментов, затем ответ, затем status. Каждое утверждение подтверди цитатой:
+   id фрагмента и ДОСЛОВНАЯ фраза из него (5–12 слов, без изменений), 1–3 цитаты.
+   Цитируй только фрагменты, которые прямо отвечают на вопрос.
 Сокращения в регламентах: {GLOSSARY}. Вопрос и фрагмент могут называть роль полностью или сокращением — это одно и то же.
 Верни только JSON."""
 
@@ -44,17 +54,21 @@ ANSWER_SCHEMA = {
     # Порядок полей = порядок генерации: сначала дословные цитаты, затем ответ, решение (status) — последним.
     "type": "object",
     "properties": {
-        "citations": {"type": "array", "maxItems": 3, "items": {
+        "citations": {"type": "array", "maxItems": 4, "items": {
             "type": "object", "properties": {"id": {"type": "string"}, "quote": {"type": "string"}},
             "required": ["id", "quote"]}},
         "answer": {"type": "string"},
         "steps": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "caveat": {"type": "string"},
         "clarify_question": {"type": "string"},
         "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
         "status": {"type": "string", "enum": ["answer", "clarify", "not_found"]},
     },
     "required": ["citations", "answer", "status"],
 }
+
+OUT_OF_SCOPE = ("Этот вопрос не касается корпоративной базы регламентов, поэтому ответ на него я не даю. "
+                "Обратитесь, пожалуйста, к своему руководителю.")
 
 
 def norm(s: str) -> str:
@@ -87,7 +101,7 @@ def fragment_label(r: dict) -> str:
     return f"{where} ({r.get('department') or 'вся компания'})"
 
 
-def run(message: str, dialog_id: str | None = None, user_name: str = "Сотрудник"):
+def run(message: str, dialog_id: str | None = None, user_name: str = "Сотрудник", user_email: str | None = None):
     t0 = time.time()
     usage = llm.Usage()
     steps = []
@@ -99,17 +113,25 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         steps.append(ev)
         return ev
 
+    def done(result, keep_state=None):
+        return finalize(dialog_id, keep_state or {}, question, result, steps, usage, t0, user_name)
+
     # 0. Контекст диалога: ответ на уточняющий вопрос продолжает исходный вопрос.
     pending = state.get("pending")
+    all_variants = False
     if pending:
         question = pending["question"]
         department = pending.get("department")
         clar = state.setdefault("clarifications", [])
         if pending["kind"] == "department":
             department = detect_department(message) or next((d for d in pending["options"] if norm(d) in norm(message)), None)
-            clar.append(f"Подразделение: {department or message}")
+            if not department and ALL_RE.search(message):
+                all_variants = True
+                state["variants"] = pending["options"]
+            clar.append(f"Подразделение: {department or ('все варианты' if all_variants else message)}")
         else:
             clar.append(f"{pending.get('clarify_question', 'Уточнение')} — {message}")
+        state.pop("pending", None)
         yield step(f"Продолжаю вопрос с учётом уточнения: «{message}»")
     else:
         question, department, state = message, None, {"clarifications": []}
@@ -122,51 +144,54 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     plan = llm.chat_json(SYS_PLAN, full_q, usage, max_tokens=150, slot=0)
     subqueries = [q for q in plan.get("subqueries", []) if isinstance(q, str)][:3]
     if plan.get("in_scope") is False and not search.kb_search(full_q, department):
-        # Вне регламентов и нет разъяснения службы качества → сразу запрос в службу качества.
-        yield step("Вопрос вне регламентов, разъяснений службы качества по нему нет", tool="check")
-        result = finish_not_found(question, department, user_name, "вопрос вне действующих регламентов", [], [], steps, usage)
-        yield step(f"Создан запрос № {result['ticket_id']} в службу качества, письмо на {config.QUALITY_EMAIL}", tool="escalate")
-        yield from finalize(dialog_id, {}, question, result, steps, usage, t0, user_name)
+        yield step("Вопрос не о правилах и процессах компании — регламенты к нему не относятся", tool="check")
+        yield from done({"status": "out_of_scope", "answer": OUT_OF_SCOPE, "citations": []})
         return
     queries = [question] + subqueries
-    yield step(f"Подразделение: {department or 'не указано'}; под-запросы: " + " · ".join(subqueries), tool="plan",
-               detail={"department": department, "subqueries": subqueries})
+    yield step(f"Подразделение: {department or ('все варианты' if all_variants else 'не указано')}; под-запросы: "
+               + " · ".join(subqueries), tool="plan", detail={"department": department, "subqueries": subqueries})
 
     # 2. Гибридный поиск (FTS + вектор) по действующим регламентам + разъяснения службы качества.
-    hits = search.hybrid(queries, department, k=config.TOP_K)
+    if all_variants:
+        hits = []
+        for dep in state.get("variants", []):
+            hits += search.hybrid(queries, dep, k=2)
+    else:
+        hits = search.hybrid(queries, department, k=config.TOP_K)
     kb = search.kb_search(full_q, department)
     yield step(f"Нашёл {len(hits)} пунктов в {len({h['doc_id'] for h in hits})} регламентах"
                + (f" и {len(kb)} разъяснений службы качества" if kb else ""), tool="search",
                detail=[fragment_label(h) for h in hits])
 
-    # 3. Проверка однозначности по подразделению (кодом): ответ в разных подразделениях разный.
-    if not department and n_clar < 2 and hits:
-        deps = []
-        for h in hits[:8]:
-            if h["department"] and h["department"] not in deps and h["score"] >= hits[0]["score"] * 0.6:
-                deps.append(h["department"])
-        if len(deps) >= 2 and not kb:
+    # 3. Проверка однозначности по подразделению (кодом): в разных подразделениях порядок разный.
+    if not department and not all_variants and n_clar < MAX_CLARIFY and hits and not kb:
+        scores = search.department_scores([question] + subqueries[:1])
+        top = max(scores.values()) if scores else 0
+        deps = [d for d, v in sorted(scores.items(), key=lambda x: -x[1]) if v >= top - AMBIGUITY_GAP and v >= 0.5]
+        yield step("Близость вопроса к регламентам подразделений: "
+                   + ", ".join(f"{d} {v:.2f}" for d, v in sorted(scores.items(), key=lambda x: -x[1])), tool="check")
+        if len(deps) >= 2:
             q = "Порядок отличается в разных подразделениях. О каком подразделении ваш вопрос?"
             state["pending"] = {"kind": "department", "question": question, "options": deps}
             yield step(f"Нашёл разные правила в подразделениях: {', '.join(deps)} — нужно уточнение", tool="check")
-            result = {"status": "clarify", "answer": q, "clarify_question": q, "options": deps, "citations": [],
-                      "sources": [fragment_label(h) for h in hits[:5]]}
-            yield from finalize(dialog_id, state, question, result, steps, usage, t0, user_name)
+            yield from done({"status": "clarify", "answer": q, "clarify_question": q, "options": deps + [ALL_VARIANTS],
+                             "citations": [], "sources": [fragment_label(h) for h in hits[:5]]}, state)
             return
 
-    # 4. Обход графа связей: ссылки на другие пункты, подпункты, разъяснения, пробелы базы.
+    # 4. Обход графа связей: ссылки на другие пункты, подпункты, разъяснения, документы вне базы.
     g = search.expand([h["id"] for h in hits[:4]])
     seen = {h["id"] for h in hits}
     extra = [r for r in g["linked"] + g["children"] if r["id"] not in seen]
     gaps = g["gaps"]
     yield step(f"Граф связей: +{len(g['linked'])} пунктов по ссылкам, +{len(g['children'])} подпунктов"
+               + (f", разъяснений к пунктам: {len(g['explains'])}" if g["explains"] else "")
                + (f"; ссылки на документы вне базы: {', '.join(x['dst_ref_text'] for x in gaps[:3])}" if gaps else ""),
                tool="graph", detail={"linked": [fragment_label(r) + ' — ' + r['via'] for r in extra],
                                      "gaps": [x["dst_ref_text"] for x in gaps]})
 
     # 5. Сборка доказательств: пункты (с подпунктами и связанными), разъяснения. Бюджет токенов.
-    evidence, budget = {}, config.MAX_EVIDENCE_TOKENS
-    for r in hits[:4] + extra[:1]:
+    evidence, budget = {}, config.MAX_EVIDENCE_TOKENS + (400 if all_variants else 0)
+    for r in (hits[:6] if all_variants else hits[:4] + extra[:1]):
         text = r["text"] if len(r["text"]) <= 500 else r["text"][:500] + " …"
         cost = len(text) // 3
         if budget - cost < 0 and evidence:
@@ -176,15 +201,20 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     for a in kb + [e for e in g["explains"] if e["id"] not in {k["id"] for k in kb}]:
         evidence[f"K{a['id']}"] = {"kind": "kb", "text": f"Вопрос: {a['question']}\nОтвет службы качества: {a['answer']}",
                                    "title": a.get("title") or "Разъяснение службы качества", "clause_no": a.get("clause_no"),
-                                   "department": a.get("department"), "ticket_id": a.get("ticket_id"), "id": a["id"]}
+                                   "department": a.get("department"), "ticket_id": a.get("ticket_id"), "id": a["id"],
+                                   "doc_id": a.get("doc_id")}
     ctx = "\n\n".join(
         f"[{fid}] {('Разъяснение службы качества (запрос № ' + str(e['ticket_id']) + ')') if e['kind'] == 'kb' else fragment_label(e)}"
         f"{(' · раздел: ' + e['section']) if e.get('section') else ''}\n{e['text']}" for fid, e in evidence.items())
 
     # 6. Ответ строго по фрагментам (вызов LLM № 2).
     yield step(f"Формулирую ответ по {len(evidence)} фрагментам", tool="answer")
-    user = f"Вопрос: {full_q}\n\nФрагменты:\n{ctx}"
-    out = llm.chat_json(SYS_ANSWER, user, usage, max_tokens=350, schema=ANSWER_SCHEMA, slot=1)
+    task = ("\nСотрудник не знает подразделение: дай ответ ОТДЕЛЬНО для каждого подразделения из фрагментов "
+            "(«В <подразделение>: …»), каждое — со своей цитатой. Уточняющих вопросов не задавай." if all_variants else "")
+    if n_clar >= MAX_CLARIFY:
+        task += "\nЛимит уточнений исчерпан: уточняющих вопросов больше не задавай (status только answer или not_found)."
+    out = llm.chat_json(SYS_ANSWER, f"Вопрос: {full_q}{task}\n\nФрагменты:\n{ctx}", usage, max_tokens=400,
+                        schema=ANSWER_SCHEMA, slot=1)
 
     # 7. Проверка кодом: цитаты дословно есть во фрагментах, ссылки на существующие фрагменты.
     status = out.get("status", "not_found")
@@ -194,72 +224,74 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         quote = cit.get("quote", "")
         if e and len(norm(quote)) >= 8 and norm(quote) in norm(e["text"]):
             valid.append({"id": cit["id"], "quote": quote, "source": fragment_label(e) if e["kind"] == "chunk"
-                          else f"Практика применения: разъяснение службы качества (запрос № {e['ticket_id']})", "doc_id": e.get("doc_id"),
-                          "clause_no": e.get("clause_no"), "kind": e["kind"]})
+                          else f"Практика применения: разъяснение службы качества (запрос № {e['ticket_id']})",
+                          "doc_id": e.get("doc_id"), "clause_no": e.get("clause_no"), "kind": e["kind"]})
         else:
             bad.append(cit)
     verdict = {"answer": "ответ найден", "clarify": "нужно уточнение", "not_found": "ответа во фрагментах нет"}.get(status, status)
     yield step(f"Модель: {verdict}. Проверил цитаты кодом: подтверждено {len(valid)}, отклонено {len(bad)}", tool="verify",
-               detail=[f"отклонена: [{b.get('id')}] {b.get('quote')}" for b in bad] + ([f"модель: {out.get('answer', '')[:300]}"] if status != "answer" else []))
+               detail=[f"отклонена: [{b.get('id')}] {b.get('quote')}" for b in bad])
 
     if status == "answer" and not valid:
         status = "not_found"
-        yield step("Ответ не подтверждён дословными цитатами — не даю недостоверный ответ", tool="verify")
-    if status == "clarify" and n_clar >= 2:
+        yield step("Ответ не подтверждён дословными цитатами — недостоверный ответ не показываю", tool="verify")
+    if status == "clarify" and n_clar >= MAX_CLARIFY:
         status = "not_found"
     if status == "clarify":
         q = out.get("clarify_question") or out.get("answer")
         state["pending"] = {"kind": "llm", "question": question, "department": department, "clarify_question": q,
                             "options": out.get("options", [])}
-        result = {"status": "clarify", "answer": q, "clarify_question": q, "options": out.get("options", []),
-                  "citations": valid, "sources": [fragment_label(e) for e in evidence.values() if e["kind"] == "chunk"][:4]}
-        yield from finalize(dialog_id, state, question, result, steps, usage, t0, user_name)
+        yield from done({"status": "clarify", "answer": q, "clarify_question": q, "options": out.get("options", []),
+                         "citations": valid}, state)
         return
     if status == "not_found":
-        reason = "в регламентах нет подтверждённого ответа"
-        result = finish_not_found(full_q, department, user_name, reason, list(evidence.values()), gaps, steps, usage)
-        yield step(f"Создан запрос № {result['ticket_id']} в службу качества, письмо на {config.QUALITY_EMAIL}", tool="escalate")
-        yield from finalize(dialog_id, {}, question, result, steps, usage, t0, user_name)
+        result = escalate(full_q, department, user_name, user_email, gaps)
+        yield step(result["step"], tool="escalate")
+        yield from done(result)
         return
-    result = {"status": "answer", "answer": out.get("answer", ""), "steps": out.get("steps", []), "citations": valid,
-              "gaps": [x["dst_ref_text"] for x in gaps], "used_kb": any(c["kind"] == "kb" for c in valid)}
-    yield from finalize(dialog_id, {}, question, result, steps, usage, t0, user_name)
+    gap_names = [x["dst_ref_text"] for x in gaps]
+    yield from done({"status": "answer", "answer": out.get("answer", ""), "steps": out.get("steps", []),
+                     "caveat": out.get("caveat", ""), "citations": valid, "gaps": gap_names,
+                     "used_kb": any(c["kind"] == "kb" for c in valid)})
 
 
-def finish_not_found(question, department, user_name, reason, evidence, gaps, steps, usage) -> dict:
-    """Кейс 1: нет ответа в регламентах → запрос в службу качества (письмо), пользователю — куда обратиться."""
-    near = [fragment_label(e) for e in evidence if e.get("kind") == "chunk"][:3]
+def escalate(question, department, user_name, user_email, gaps) -> dict:
+    """Кейс 1: ответа в регламентах нет → письмо в службу качества, сотрудник в копии (как просил заказчик).
+    Запрос сохраняется у агента: ответ службы качества (письмом) пополнит базу разъяснений — кейс 3."""
     gap_txt = [x["dst_ref_text"] for x in gaps]
-    body = (f"Служба качества, добрый день.\n\nСотрудник {user_name} ({department or 'подразделение не указано'}) задал вопрос, "
-            f"ответа на который нет в действующих регламентах:\n\n«{question}»\n\nПричина: {reason}.\n"
-            + (f"Ближайшие пункты: {'; '.join(near)}.\n" if near else "")
-            + (f"В регламентах есть ссылки на документы, которых нет в базе: {'; '.join(gap_txt)}.\n" if gap_txt else "")
-            + "\nПрошу дать ответ — после подтверждения он будет добавлен в базу знаний агента.\n\nИИ-агент по регламентам")
     with db.conn() as c:
-        tid = c.execute("""INSERT INTO tickets(user_name,department,question,context,mail_to,mail_body)
-                           VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (user_name, department, question, json.dumps({"near": near, "gaps": gap_txt, "reason": reason},
-                                                                     ensure_ascii=False), config.QUALITY_EMAIL, body)).fetchone()["id"]
-    send_mail(config.QUALITY_EMAIL, f"Запрос № {tid}: вопрос без ответа в регламентах", body)
-    ans = (f"В действующих регламентах нет однозначного ответа на этот вопрос, поэтому я не буду отвечать от себя. "
-           f"Я создал запрос № {tid} в службу качества и отправил письмо на {config.QUALITY_EMAIL}. "
-           f"Ответ придёт в раздел «Мои запросы»; после подтверждения службой качества он появится в базе знаний.")
+        tid = c.execute("""INSERT INTO tickets(user_name,department,question,context,mail_to)
+                           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                        (user_name, department, question, json.dumps({"gaps": gap_txt, "user_email": user_email},
+                                                                     ensure_ascii=False), config.QUALITY_EMAIL)).fetchone()["id"]
+        subject = mailbox.subject_for(tid, question)
+        body = (f"Здравствуйте!\n\nСотрудник {user_name}"
+                + (f" ({department})" if department else "") + " задал вопрос ИИ-агенту по регламентам:\n\n"
+                f"«{question}»\n\nВ действующих регламентах ответа нет, поэтому агент не стал отвечать от себя.\n"
+                + (f"Возможно, ответ содержится в документе, которого нет в базе агента: {'; '.join(gap_txt)}.\n" if gap_txt else "")
+                + "\nПожалуйста, ответьте на это письмо всем адресатам: сотрудник получит ответ, "
+                  "а агент добавит его в базу разъяснений и будет использовать для похожих вопросов.\n\n"
+                  "ИИ-агент по регламентам")
+        try:
+            sent = mailbox.send(config.QUALITY_EMAIL, subject, body, cc=user_email)
+        except Exception as e:
+            sent = False
+            body += f"\n\n[не отправлено: {type(e).__name__}]"
+        c.execute("UPDATE tickets SET mail_body=%s, context=context || %s WHERE id=%s",
+                  (f"Тема: {subject}\nКому: {config.QUALITY_EMAIL}" + (f"\nКопия: {user_email}" if user_email else "")
+                   + f"\n\n{body}", json.dumps({"sent": sent}), tid))
+    who = f" и поставил вас в копию ({user_email})" if user_email else ""
+    ans = (f"В действующих регламентах нет ответа на этот вопрос, поэтому я не буду отвечать от себя. "
+           f"Я отправил ваш вопрос в службу качества ({config.QUALITY_EMAIL}){who} — ответ придёт на почту. "
+           "Когда служба качества ответит, ответ попадёт в базу знаний, и на такой вопрос я смогу отвечать сам.")
     if gap_txt:
-        ans += f" Возможно, ответ есть в документе, которого нет в базе: {gap_txt[0]}."
-    return {"status": "escalated", "answer": ans, "ticket_id": tid, "near": near, "gaps": gap_txt, "citations": []}
-
-
-def send_mail(to, subject, body):
-    """Демо: письмо пишется в журнал (таблица tickets.mail_body). При заданном SMTP_HOST — реальная отправка."""
-    if not config.SMTP_HOST:
-        return
-    import smtplib
-    from email.message import EmailMessage
-    m = EmailMessage()
-    m["From"], m["To"], m["Subject"] = "agent@company.local", to, subject
-    m.set_content(body)
-    with smtplib.SMTP(config.SMTP_HOST) as s:
-        s.send_message(m)
+        ans += f" Возможно, ответ есть в документе, которого нет в моей базе: {gap_txt[0]}."
+    if not user_email:
+        ans += " Укажите свой e-mail в панели справа, чтобы получать копию."
+    step = (f"Письмо в службу качества {config.QUALITY_EMAIL}" + (f", копия {user_email}" if user_email else "")
+            + (" — отправлено" if sent else " — сформировано (почта не настроена)"))
+    return {"status": "escalated", "answer": ans, "ticket_id": tid, "gaps": gap_txt, "citations": [], "mail_sent": sent,
+            "step": step}
 
 
 def finalize(dialog_id, state, question, result, steps, usage, t0, user_name):
@@ -272,4 +304,5 @@ def finalize(dialog_id, state, question, result, steps, usage, t0, user_name):
                         (dialog_id, user_name, question, outcome, json.dumps(steps, ensure_ascii=False, default=str),
                          json.dumps(result.get("citations", []), ensure_ascii=False), result.get("answer"),
                          usage.tokens_in, usage.tokens_out, usage.calls, latency)).fetchone()["id"]
+    result.pop("step", None)
     yield {"type": "result", "dialog_id": dialog_id, "query_id": qid, "latency_ms": latency} | usage.as_dict() | result

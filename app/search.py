@@ -107,3 +107,19 @@ def departments() -> list[str]:
     with db.conn() as c:
         return [r["department"] for r in c.execute(
             "SELECT DISTINCT department FROM documents WHERE department IS NOT NULL AND status='in_force' ORDER BY 1").fetchall()]
+
+
+def department_scores(queries: list[str]) -> dict:
+    """Лучшая косинусная близость к вопросу в регламентах каждого подразделения.
+    Если в нескольких подразделениях есть почти одинаково близкие пункты — ответ зависит от подразделения."""
+    vecs = llm.embed(queries)
+    best = {}
+    with db.conn() as c:
+        for v in vecs:
+            for r in c.execute("""
+                SELECT d.department, max(1 - (ch.embedding <=> %(v)s::vector)) AS sim
+                FROM chunks ch JOIN documents d ON d.id=ch.doc_id
+                WHERE d.status='in_force' AND d.department IS NOT NULL AND ch.embedding IS NOT NULL
+                GROUP BY d.department""", {"v": v}).fetchall():
+                best[r["department"]] = max(best.get(r["department"], 0), float(r["sim"]))
+    return best

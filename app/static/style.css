@@ -57,3 +57,6 @@ th { color:var(--mute); font-weight:600; font-size:12.5px; }
 @keyframes s { to { transform:rotate(360deg); } }
 .cite[data-doc] { cursor:pointer; } .cite[data-doc]:hover { background:#ececf0; }
 .cite.hl { background:#fff4d6; border-left:3px solid var(--warn); }
+.badge.out_of_scope { background:#eeeef2; color:var(--mute); }
+.caveat { background:#fff4d6; border-radius:8px; padding:6px 10px; margin:6px 0; font-size:13.5px; }
+#pollMail { padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; }
