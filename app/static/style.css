@@ -64,3 +64,9 @@ th { color:var(--mute); font-weight:600; font-size:12.5px; }
 .srcbox { font-size:13px; background:#f3f6ff; border-radius:8px; padding:8px 10px; margin-bottom:8px; }
 .srcitem { cursor:pointer; color:#1d4fa8; margin-top:4px; } .srcitem small { display:block; color:var(--mute); }
 .caret { animation: blink 1s steps(1) infinite; } @keyframes blink { 50% { opacity:0; } }
+
+/* Контроль срока ответа службы качества */
+.sla { margin:6px 0 10px; font-size:14px; }
+.over { color:#c62828; }
+.t.overdue { border-left:4px solid #c62828; background:#fff4f4; }
+.kpi.over b { color:#c62828; }

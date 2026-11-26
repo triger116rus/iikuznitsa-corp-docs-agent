@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import iterate_in_threadpool
 
-from . import agent, db, kb, mailbox
+from . import agent, config, db, kb, mailbox
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -76,10 +76,14 @@ async def ask(req: Ask):
 @app.get("/api/tickets")
 def tickets(user_name: str | None = None):
     with db.conn() as c:
+        # Контроль срока: у каждого письма в службу качества есть срок ответа; просроченные видны всем в интерфейсе.
         return c.execute("""SELECT id, created_at, user_name, department, question, context, status, answer, answered_by,
-                                   answered_at, mail_to, mail_body FROM tickets
+                                   answered_at, mail_to, mail_body,
+                                   created_at + make_interval(hours => %(h)s) AS due_at,
+                                   (status = 'open' AND now() > created_at + make_interval(hours => %(h)s)) AS overdue
+                            FROM tickets
                             WHERE %(u)s::text IS NULL OR user_name=%(u)s ORDER BY id DESC LIMIT 100""",
-                         {"u": user_name}).fetchall()
+                         {"u": user_name, "h": config.ANSWER_SLA_HOURS}).fetchall()
 
 
 @app.post("/api/tickets/{tid}/answer")
@@ -150,7 +154,9 @@ def stats():
                          FROM query_log""").fetchone()
         last = c.execute("""SELECT id, ts, user_name, question, outcome, latency_ms, tokens_in, tokens_out, llm_calls, feedback
                             FROM query_log ORDER BY id DESC LIMIT 30""").fetchall()
-        tk = c.execute("SELECT count(*) FILTER (WHERE status='open') AS open, count(*) AS total FROM tickets").fetchone()
+        tk = c.execute("""SELECT count(*) FILTER (WHERE status='open') AS open, count(*) AS total,
+                               count(*) FILTER (WHERE status='open' AND now() > created_at + make_interval(hours => %s)) AS overdue
+                        FROM tickets""", (config.ANSWER_SLA_HOURS,)).fetchone()
         # Разъяснения, которые агент использует чаще всего, — кандидаты на внесение в регламент (инициатива бота).
         hot = c.execute("""SELECT a.id, a.question, a.answer, a.clause_no, d.title, count(*) AS uses
                             FROM query_log q, jsonb_array_elements(q.citations) cit

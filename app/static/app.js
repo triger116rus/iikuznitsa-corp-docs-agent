@@ -129,8 +129,10 @@ async function loadQuality() {
   if (!docsCache.length) docsCache = await (await fetch("/api/docs")).json();
   const t = await (await fetch("/api/tickets")).json();
   const opts = `<option value="">— привязать к регламенту —</option>` + docsCache.map(d => `<option value="${d.id}">${esc(d.title)}</option>`).join("");
-  $("#ticketList").innerHTML = t.length ? t.map(x => `<div class="t" data-id="${x.id}">
-    <span class="st ${x.status}">Запрос № ${x.id} · ${fmt(x.created_at)} · ${esc(x.user_name)}${x.department ? " · " + esc(x.department) : ""} · ${x.status === "open" ? "открыт" : "отвечен " + fmt(x.answered_at)}</span>
+  const nOpen = t.filter(x => x.status === "open").length, nOver = t.filter(x => x.overdue).length;
+  const summary = `<div class="sla">Ждут ответа: <b>${nOpen}</b>${nOver ? ` · <span class="over">просрочено: <b>${nOver}</b></span>` : " · просроченных нет"}</div>`;
+  $("#ticketList").innerHTML = t.length ? summary + t.map(x => `<div class="t ${x.overdue ? "overdue" : ""}" data-id="${x.id}">
+    <span class="st ${x.status}">Запрос № ${x.id} · ${fmt(x.created_at)} · ${esc(x.user_name)}${x.department ? " · " + esc(x.department) : ""} · ${x.status === "open" ? (x.overdue ? `<b class="over">ПРОСРОЧЕН — срок ответа был ${fmt(x.due_at)}</b>` : "открыт, ответ до " + fmt(x.due_at)) : "отвечен " + fmt(x.answered_at)}</span>
     <div><b>${esc(x.question)}</b></div>
     <details><summary>Письмо на ${esc(x.mail_to)}</summary><pre>${esc(x.mail_body)}</pre></details>
     ${x.status === "open" ? `<textarea placeholder="Ответ службы качества (уйдёт сотруднику и в базу знаний агента)"></textarea>
@@ -217,7 +219,8 @@ async function loadStats() {
     <div class="kpi"><b>${m.avg_in ?? "—"} → ${m.avg_out ?? "—"}</b><span>токенов на шаг (вход → выход)</span></div>
     <div class="kpi"><b>${m.avg_calls ?? "—"}</b><span>вызовов LLM на вопрос</span></div>
     <div class="kpi"><b>${m.out_of_scope}</b><span>вне регламентов</span></div>
-    <div class="kpi"><b>${s.tickets.open} / ${s.tickets.total}</b><span>писем в службу качества: ждут ответа / всего</span></div></div>
+    <div class="kpi"><b>${s.tickets.open} / ${s.tickets.total}</b><span>писем в службу качества: ждут ответа / всего</span></div>
+    <div class="kpi ${s.tickets.overdue ? "over" : ""}"><b>${s.tickets.overdue}</b><span>ответов службы качества просрочено</span></div></div>
     ${s.hot.length ? `<h3>Частые вопросы, закрытые разъяснениями службы качества — кандидаты на внесение в регламент</h3><table><tr><th>Вопрос</th><th>Разъяснение</th><th>Предложение агента по регламенту</th><th>Использовано раз</th></tr>` +
       s.hot.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.proposal || "—")}</td><td>${x.uses}</td></tr>`).join("") + "</table><h3>Журнал вопросов</h3>" : ""}
     <table><tr><th>Время</th><th>Сотрудник</th><th>Вопрос</th><th>Итог</th><th>с</th><th>Токены</th><th>Оценка</th></tr>` +
