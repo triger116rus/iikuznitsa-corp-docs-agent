@@ -20,7 +20,10 @@ QUOTE_HEADER = re.compile(r"^.{0,160}(писал|пишет|wrote).*:\s*$", re.I
 
 
 def subject_for(ticket_id: int, question: str) -> str:
-    q = question if len(question) <= 70 else question[:70] + "…"
+    # Только первая строка: к вопросу бывают дописаны уточнения/оговорки с новой строки, а перевод строки
+    # в заголовке письма — ValueError при отправке (письмо не уходило бы молча).
+    q = " ".join(question.split("\n", 1)[0].split())
+    q = q if len(q) <= 70 else q[:70] + "…"
     return f"[Регламенты #{ticket_id}] Вопрос без ответа в регламентах: {q}"
 
 

@@ -35,6 +35,7 @@ DEP_ALIASES = {
     "Технологическая дирекция": r"тех\.?\s*дирекц|технологическ\w* дирекц|технической дирекц",
 }
 ALL_VARIANTS = "Не знаю — покажите все варианты"
+OTHER_DEP = "Другое подразделение — в службу качества"
 ALL_RE = re.compile(r"не знаю|все вариант|несколько|комплексн|обе|оба|все подразделени", re.I)
 
 SYS_PLAN = """Ты планируешь поиск по внутренним регламентам компании (пресейл и проектная деятельность подразделений).
@@ -175,6 +176,25 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
             if not department and ALL_RE.search(message):
                 all_variants = True
                 state["variants"] = pending["options"]
+            if not department and not all_variants:
+                # Названо подразделение, для которого регламентов в базе нет («Бухгалтерия»): не отвечаем по чужим
+                # регламентам. Один раз объясняем, для кого регламенты есть; повторно — письмо в службу качества.
+                opts, tries, name = pending["options"], pending.get("unknown", 0) + 1, message.strip()[:60]
+                state.pop("pending", None)
+                if tries < 2 and OTHER_DEP not in message:
+                    q = (f"Регламента для подразделения «{name}» в базе нет — по этому вопросу регламенты есть для: "
+                         f"{', '.join(opts)}. Выберите одно из них или передам вопрос в службу качества.")
+                    state["pending"] = {**pending, "unknown": tries}
+                    yield step(f"Подразделение «{name}» не найдено среди регламентов — уточняю", tool="check")
+                    yield from done({"status": "clarify", "answer": q, "clarify_question": q,
+                                     "options": opts + [ALL_VARIANTS, OTHER_DEP], "citations": []}, state)
+                    return
+                yield step("Регламента для названного подразделения в базе нет — не отвечаю по чужим регламентам", tool="check")
+                result = escalate(question + f"\nПодразделение сотрудника: {name} (регламента для него в базе нет)",
+                                  None, user_name, user_email, [])
+                yield step(result["step"], tool="escalate")
+                yield from done(result)
+                return
             clar.append(f"Подразделение: {department or ('все варианты' if all_variants else message)}")
         else:
             clar.append(f"{pending.get('clarify_question', 'Уточнение')} — {message}")
