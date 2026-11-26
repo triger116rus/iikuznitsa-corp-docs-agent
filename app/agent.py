@@ -16,6 +16,7 @@ from .ingest import ROLES
 
 GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())
 MAX_CLARIFY = 2
+RELEVANCE_MIN = 0.5    # ниже — в регламентах нет близких пунктов (замер 26.11: ответы 0.57+, «отпуск» 0.49)
 AMBIGUITY_GAP = 0.05  # подразделения с близостью в пределах 0.05 от лучшей — ответ неоднозначен
 
 DEP_ALIASES = {
@@ -174,10 +175,19 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
                + (f" и {len(kb)} разъяснений службы качества" if kb else ""), tool="search",
                detail=[fragment_label(h) for h in hits])
 
+    # 2б. Нет даже близких пунктов и разъяснений → сразу письмо в службу качества (без долгого вызова LLM).
+    scores = search.department_scores([question] + subqueries[:1])
+    top = max(scores.values()) if scores else 0
+    if top < RELEVANCE_MIN and not kb:
+        yield step(f"Близких пунктов в регламентах нет (лучшая близость {top:.2f} < {RELEVANCE_MIN}) — "
+                   "не отвечаю от себя", tool="check")
+        result = escalate(full_q, department, user_name, user_email, [])
+        yield step(result["step"], tool="escalate")
+        yield from done(result)
+        return
+
     # 3. Проверка однозначности по подразделению (кодом): в разных подразделениях порядок разный.
     if not department and not all_variants and n_clar < MAX_CLARIFY and hits and not kb:
-        scores = search.department_scores([question] + subqueries[:1])
-        top = max(scores.values()) if scores else 0
         deps = [d for d, v in sorted(scores.items(), key=lambda x: -x[1]) if v >= top - AMBIGUITY_GAP and v >= 0.5]
         yield step("Близость вопроса к регламентам подразделений: "
                    + ", ".join(f"{d} {v:.2f}" for d, v in sorted(scores.items(), key=lambda x: -x[1])), tool="check")

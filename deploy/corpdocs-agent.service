@@ -7,6 +7,8 @@ Wants=postgresql.service llama-chat.service llama-embed.service
 User=stand
 WorkingDirectory=/srv/stand/app
 Environment=DB_DSN=dbname=corpdocs
+# почта службы качества: MAIL_USER/MAIL_PASS/QUALITY_EMAIL/SMTP_HOST/IMAP_HOST (файл вне репозитория, права 640)
+EnvironmentFile=-/srv/stand/app.env
 ExecStart=/srv/stand/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 120
 Restart=always
 RestartSec=3
