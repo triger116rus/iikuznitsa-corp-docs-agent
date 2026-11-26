@@ -44,8 +44,9 @@ def main():
         ok_first = status == q["expect"]
         ok_final = final.get("status") == q.get("then", q["expect"])
         cited = [c.get("clause_no") for c in final.get("citations", []) if c.get("kind") == "chunk"]
-        ok_clause = (not q.get("clauses")) or any(c in q["clauses"] for c in cited)
-        hallucination = q["expect"] == "escalated" and final.get("status") == "answer"
+        ok_clause = ((not q.get("clauses")) or any(c in q["clauses"] for c in cited)) and \
+            (not q.get("kb") or any(c.get("kind") == "kb" for c in final.get("citations", [])))
+        hallucination = q["expect"] in ("escalated", "out_of_scope") and final.get("status") == "answer"
         rows.append({"id": q["id"], "case": q["case"], "q": q["q"], "first": status, "final": final.get("status"),
                      "ok": ok_first and ok_final and ok_clause, "ok_clause": ok_clause, "cited": cited,
                      "hallucination": hallucination, "sec": round(time.time() - t0, 1), "turns": turns,

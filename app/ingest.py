@@ -46,6 +46,29 @@ REF_STOP = re.compile(r"\s(?:и|в|на|для|при|после|до|от|–|-
 REF_NOT_DOC = re.compile(r"^(?:регламент\w*|инструкци\w*)\s+(?:пользователя|по|под)$|^регламент\w*$", re.I)
 
 
+def expand_roles(text: str) -> str:
+    """Для эмбеддингов: «РП» → «руководитель проекта (РП)». Сотрудники спрашивают полными названиями ролей,
+    регламенты пишут сокращениями — без расшифровки векторная модель их плохо сопоставляет."""
+    for abbr, name in ROLES.items():
+        text = re.sub(rf"(?<![А-ЯЁA-Zа-яё]){re.escape(abbr)}(?![А-ЯЁA-Zа-яё])", f"{name.lower()} ({abbr})", text)
+    return text
+
+
+def embed_text(title: str, section: str | None, text: str) -> str:
+    return expand_roles(f"{title}. {section or ''}. {text}")
+
+
+def reembed():
+    """Пересчитать эмбеддинги пунктов на месте (без перезагрузки документов и без потери базы разъяснений)."""
+    with db.conn() as c:
+        rows = c.execute("""SELECT ch.id, d.title, ch.section, ch.text FROM chunks ch JOIN documents d ON d.id=ch.doc_id
+                            ORDER BY ch.id""").fetchall()
+        vecs = llm.embed([embed_text(r["title"], r["section"], r["text"]) for r in rows])
+        for r, v in zip(rows, vecs):
+            c.execute("UPDATE chunks SET embedding=%s WHERE id=%s", (v, r["id"]))
+    print(f"[reembed] пунктов: {len(rows)}")
+
+
 def node_key(ref: str) -> str:
     """Нормализованный ключ узла: «регламентом подбора субподрядчика» и «регламенту подбора…» → один узел."""
     words = re.sub(r"[«»]", "", ref.lower()).split()
@@ -148,7 +171,7 @@ def load(paths: list[pathlib.Path], reset: bool = False):
             doc_id = c.execute(
                 "INSERT INTO documents(title,file_name,department,process,owner_contact) VALUES (%s,%s,%s,%s,%s) RETURNING id",
                 (title, path.name, dep, proc, "Служба качества")).fetchone()["id"]
-            texts = [f"{title}. {ch['section'] or ''}. {ch['text']}" for ch in chunks]
+            texts = [embed_text(title, ch["section"], ch["text"]) for ch in chunks]
             vecs = llm.embed(texts)
             for i, (ch, v) in enumerate(zip(chunks, vecs)):
                 ch["id"] = c.execute(
@@ -209,6 +232,9 @@ def rebuild_links():
 
 
 if __name__ == "__main__":
+    if "--reembed" in sys.argv:
+        reembed()
+        sys.exit(0)
     if "--links" in sys.argv:
         rebuild_links()
         sys.exit(0)

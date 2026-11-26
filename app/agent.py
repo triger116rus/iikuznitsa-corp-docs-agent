@@ -16,7 +16,7 @@ from .ingest import ROLES
 
 GLOSSARY = "; ".join(f"{k} — {v}" for k, v in ROLES.items())
 MAX_CLARIFY = 2
-RELEVANCE_MIN = 0.5    # ниже — в регламентах нет близких пунктов (замер 26.11: ответы 0.57+, «отпуск» 0.49)
+RELEVANCE_MIN = 0.56   # ниже — в регламентах нет близких пунктов (замер 26.11: ответы 0.57+, «отпуск» 0.49)
 AMBIGUITY_GAP = 0.05  # подразделения с близостью в пределах 0.05 от лучшей — ответ неоднозначен
 
 DEP_ALIASES = {
@@ -48,7 +48,8 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
    и в caveat одной фразой напиши оговорку: какой части ответа в регламенте нет. О том, что не спрашивали, не пиши.
 5. Сначала выпиши цитаты из фрагментов, затем ответ, затем status. Каждое утверждение подтверди цитатой:
    id фрагмента и ДОСЛОВНАЯ фраза из него (5–12 слов, без изменений), 1–3 цитаты.
-   Цитируй только фрагменты, которые прямо отвечают на вопрос.
+   Цитируй только фрагменты, которые прямо отвечают на вопрос. На вопрос «кто делает X» отвечай по фрагменту,
+   где назван исполнитель именно действия X (тот, кто X выполняет), а не фрагменту, где X лишь упоминается.
 Сокращения в регламентах: {GLOSSARY}. Вопрос и фрагмент могут называть роль полностью или сокращением — это одно и то же.
 Верни только JSON."""
 
@@ -73,6 +74,19 @@ PARTIAL_ANSWER = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)')
 
 OUT_OF_SCOPE = ("Этот вопрос не касается корпоративной базы регламентов, поэтому ответ на него я не даю. "
                 "Обратитесь, пожалуйста, к своему руководителю.")
+
+
+ROLE_STEMS = {abbr: name.lower()[:-2] for abbr, name in ROLES.items()}  # «руководитель проекта» → «руководитель проек»
+
+
+def with_abbreviations(text: str) -> str | None:
+    """Вариант вопроса с сокращениями ролей, как они записаны в регламентах (РП, SS, ГИП…). None — если замен нет."""
+    out = text
+    for abbr, name in ROLES.items():
+        words = name.lower().split()
+        pat = r"(?<![а-яё])" + r"\s+".join(w[:max(4, len(w) - 2)] + r"[а-яё-]*" for w in words)
+        out = re.sub(pat, abbr, out, flags=re.I)
+    return out if out != text else None
 
 
 def norm(s: str) -> str:
@@ -159,7 +173,7 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         yield step("Вопрос не о правилах и процессах компании — регламенты к нему не относятся", tool="check")
         yield from done({"status": "out_of_scope", "answer": OUT_OF_SCOPE, "citations": []})
         return
-    queries = [question] + subqueries
+    queries = [question] + subqueries + [q for q in [with_abbreviations(question)] if q]
     yield step(f"Подразделение: {department or ('все варианты' if all_variants else 'не указано')}; под-запросы: "
                + " · ".join(subqueries), tool="plan", detail={"department": department, "subqueries": subqueries})
 

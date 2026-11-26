@@ -63,7 +63,7 @@ def expand(chunk_ids: list[int], depth: int = 2) -> dict:
     - висячие ссылки (цель вне корпуса) → пробелы базы;
     - разъяснения службы качества, привязанные к пункту/документу."""
     if not chunk_ids:
-        return {"linked": [], "gaps": [], "explains": []}
+        return {"linked": [], "children": [], "gaps": [], "explains": []}
     with db.conn() as c:
         linked = c.execute("""
             WITH RECURSIVE walk(chunk_id, depth, path) AS (
@@ -87,6 +87,14 @@ def expand(chunk_ids: list[int], depth: int = 2) -> dict:
             JOIN documents d ON d.id=ch.doc_id
             WHERE base.id = ANY(%(ids)s) AND base.clause_no IS NOT NULL AND NOT ch.id = ANY(%(ids)s)
             ORDER BY ch.doc_id, ch.ord LIMIT 6""", {"ids": chunk_ids}).fetchall()
+        # Структура регламента как граф: раздел → его первый пункт (обычно формулирует правило раздела).
+        leads = c.execute("""
+            SELECT DISTINCT ON (ch.id) ch.id, ch.doc_id, ch.clause_no, ch.section, ch.text, d.title, d.department, d.process
+            FROM chunks base JOIN chunks ch ON ch.doc_id=base.doc_id AND ch.section=base.section
+              AND ch.clause_no = split_part(base.clause_no, '.', 1) || '.1'
+            JOIN documents d ON d.id=ch.doc_id
+            WHERE base.id = ANY(%(ids)s) AND base.clause_no IS NOT NULL AND NOT ch.id = ANY(%(ids)s)
+            LIMIT 3""", {"ids": chunk_ids}).fetchall()
         gaps = c.execute("""
             SELECT DISTINCT ON (l.dst_node) l.dst_node, l.dst_ref_text, l.src_chunk, ch.clause_no, d.title
             FROM doc_links l JOIN chunks ch ON ch.id=l.src_chunk JOIN documents d ON d.id=l.src_doc
@@ -100,7 +108,9 @@ def expand(chunk_ids: list[int], depth: int = 2) -> dict:
         r["via"] = f"граф: ссылка (глубина {r['depth']})"
     for r in children:
         r["via"] = "граф: подпункт"
-    return {"linked": list(linked), "children": list(children), "gaps": list(gaps), "explains": list(explains)}
+    for r in leads:
+        r["via"] = "граф: первый пункт раздела"
+    return {"linked": list(leads) + list(linked), "children": list(children), "gaps": list(gaps), "explains": list(explains)}
 
 
 def departments() -> list[str]:
