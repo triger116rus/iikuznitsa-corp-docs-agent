@@ -71,13 +71,24 @@ function renderResult(el, r) {
   if (r.steps && r.steps.length) h += `<ol class="steps-list">${r.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>`;
   if (r.options && r.options.length) h += `<div class="options">${r.options.map(o => `<button>${esc(o)}</button>`).join("")}</div>`;
   for (const c of r.citations || [])
-    h += `<div class="cite ${c.kind === "kb" ? "kb" : ""}"><b>${esc(c.source)}</b><q>${esc(c.quote)}</q></div>`;
+    h += `<div class="cite ${c.kind === "kb" ? "kb" : ""}" ${c.doc_id ? `data-doc="${c.doc_id}" data-clause="${esc(c.clause_no || "")}" title="Открыть пункт в регламенте"` : ""}>
+      <b>${esc(c.source)}${c.doc_id ? " ↗" : ""}</b><q>${esc(c.quote)}</q></div>`;
   if (r.gaps && r.gaps.length) h += `<div class="meta">В регламенте есть ссылки на документы вне базы: ${r.gaps.map(esc).join("; ")}</div>`;
   h += `<div class="meta">${(r.latency_ms / 1000).toFixed(1)} с · вызовов LLM ${r.llm_calls} · токенов ${r.tokens_in}→${r.tokens_out}
-        <span class="fb"><button data-v="up">👍 полезно</button><button data-v="down">👎 неверно</button></span></div>`;
+        <span class="fb"><button data-v="up">👍 полезно</button><button data-v="down">👎 неверно</button></span>
+        <span class="fb"><button class="rep">⚠ сообщить о несоответствии</button></span></div>`;
   el.innerHTML = h;
   el.querySelectorAll(".options button").forEach(b => b.onclick = () => ask(b.textContent));
-  el.querySelectorAll(".fb button").forEach(b => b.onclick = async () => {
+  el.querySelectorAll(".cite[data-doc]").forEach(c => c.onclick = () => openDoc(+c.dataset.doc, c.dataset.clause));
+  el.querySelector(".rep").onclick = async () => {
+    const text = prompt("Что не так? Например: регламенты противоречат друг другу, пункт устарел, ответ неточен");
+    if (!text) return;
+    const res = await (await fetch("/api/report", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text, query_id: r.query_id, user_name: $("#userName").value})})).json();
+    el.querySelector(".rep").parentElement.textContent = `передано в службу качества, запрос № ${res.ticket_id}`;
+    loadMyTickets(); loadOpenCount();
+  };
+  el.querySelectorAll(".fb button[data-v]").forEach(b => b.onclick = async () => {
     await fetch("/api/feedback", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({query_id: r.query_id, value: b.dataset.v})});
     b.parentElement.textContent = "спасибо, учтено";
   });
@@ -123,16 +134,21 @@ async function loadQuality() {
       <td>${esc(a.title || "")}${a.clause_no ? ", п. " + esc(a.clause_no) : ""}</td></tr>`).join("") + "</table>" : `<div class="hint">Пока пусто</div>`;
 }
 
+async function openDoc(docId, clause) {
+  document.querySelector('nav button[data-tab="docs"]').click();
+  const ch = await (await fetch("/api/docs/" + docId)).json();
+  const d = docsCache.find(x => x.id === docId) || {title: "Документ"};
+  $("#docView").innerHTML = `<h3>${esc(d.title)}</h3>` + ch.map(c => `<div class="cite ${c.clause_no === clause ? "hl" : ""}" id="cl-${esc(c.clause_no || c.id)}">
+    <b>${esc(c.section || "")}</b>${esc(c.text)}</div>`).join("");
+  setTimeout(() => (document.getElementById("cl-" + clause) || $("#docView")).scrollIntoView({block: "center"}), 400);
+}
+
 async function loadDocs() {
   docsCache = await (await fetch("/api/docs")).json();
   $("#docList").innerHTML = `<table><tr><th>Документ</th><th>Подразделение</th><th>Процесс</th><th>Статус</th><th>Пунктов</th><th>Ссылок</th><th>Из них вне базы</th></tr>` +
     docsCache.map(d => `<tr><td class="doclink" data-id="${d.id}">${esc(d.title)}</td><td>${esc(d.department)}</td><td>${esc(d.process)}</td>
       <td>${d.status === "in_force" ? "действует" : "утратил силу"}</td><td>${d.clauses}</td><td>${d.refs}</td><td>${d.dangling}</td></tr>`).join("") + "</table>";
-  $("#docList").querySelectorAll(".doclink").forEach(td => td.onclick = async () => {
-    const ch = await (await fetch("/api/docs/" + td.dataset.id)).json();
-    $("#docView").innerHTML = `<h3>${esc(td.textContent)}</h3>` + ch.map(c => `<div class="cite"><b>${esc(c.section || "")}</b>${esc(c.text)}</div>`).join("");
-    $("#docView").scrollIntoView();
-  });
+  $("#docList").querySelectorAll(".doclink").forEach(td => td.onclick = () => openDoc(+td.dataset.id, null));
   const g = await (await fetch("/api/graph")).json();
   drawGraph(g);
   $("#gaps").innerHTML = `<h3>Документы, на которые ссылаются регламенты, но их нет в базе</h3><table><tr><th>Ссылка</th><th>Сколько раз</th><th>Где</th></tr>` +
@@ -146,8 +162,8 @@ function drawGraph(g) {
   const H = Math.max(docs.length, roles.length, gaps.length) * rowH + 60;
   const pos = {};
   const colors = {"Дирекция ИБ": "#c8102e", "ДБРЦТ": "#1d6fd1", "Технологическая дирекция": "#1a7f37"};
-  docs.forEach((d, i) => pos["d" + d.id] = [180, 50 + i * (H - 80) / Math.max(1, docs.length - 1)]);
-  roles.forEach((r, i) => pos[r] = [560, 40 + i * rowH]);
+  docs.forEach((d, i) => pos["d" + d.id] = [330, 50 + i * (H - 80) / Math.max(1, docs.length - 1)]);
+  roles.forEach((r, i) => pos[r] = [600, 40 + i * rowH]);
   gaps.forEach((r, i) => pos[r] = [900, 40 + i * rowH]);
   let s = `<svg viewBox="0 0 ${W} ${H}">`;
   for (const e of g.edges) {
@@ -157,7 +173,7 @@ function drawGraph(g) {
     s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${col}" stroke-width="${Math.min(4, 0.6 + e.n / 4)}" opacity=".7"/>`;
   }
   docs.forEach(d => { const [x, y] = pos["d" + d.id]; const c = colors[d.department] || "#444";
-    s += `<circle cx="${x}" cy="${y}" r="9" fill="${c}"/><text x="${x - 14}" y="${y + 4}" text-anchor="end" font-size="12.5">${esc(d.title.slice(0, 34))}</text>`; });
+    s += `<circle cx="${x}" cy="${y}" r="9" fill="${c}"/><text x="${x - 14}" y="${y + 4}" text-anchor="end" font-size="12.5">${esc(d.title.slice(0, 48))}</text>`; });
   const roleName = Object.fromEntries(g.edges.filter(e => e.kind === "mentions_role").map(e => [e.dst_node, e.label]));
   roles.forEach(r => { const [x, y] = pos[r];
     s += `<rect x="${x - 26}" y="${y - 11}" width="52" height="22" rx="11" fill="#f0f0f3" stroke="#bbb"/><text x="${x}" y="${y + 4}" text-anchor="middle" font-size="12" font-weight="600">${esc(r.slice(5))}</text>
@@ -165,7 +181,7 @@ function drawGraph(g) {
   const gapLabel = Object.fromEntries(g.gaps.map(x => [x.dst_node, x.label]));
   gaps.forEach(r => { const [x, y] = pos[r];
     s += `<rect x="${x - 6}" y="${y - 9}" width="12" height="18" fill="#fff" stroke="#5a3e9b" stroke-dasharray="3 2"/><text x="${x + 14}" y="${y + 4}" font-size="12" fill="#5a3e9b">${esc(gapLabel[r].slice(0, 42))}</text>`; });
-  s += `<text x="180" y="18" text-anchor="middle" font-size="12" fill="#888">Регламенты</text><text x="560" y="18" text-anchor="middle" font-size="12" fill="#888">Роли</text>
+  s += `<text x="260" y="18" text-anchor="middle" font-size="12" fill="#888">Регламенты</text><text x="600" y="18" text-anchor="middle" font-size="12" fill="#888">Роли</text>
         <text x="960" y="18" font-size="12" fill="#888">Ссылки на документы вне базы (пробелы)</text></svg>`;
   $("#graph").innerHTML = s;
 }

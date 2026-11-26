@@ -30,6 +30,12 @@ class TicketAnswer(BaseModel):
     add_to_kb: bool = True
 
 
+class Report(BaseModel):
+    text: str
+    query_id: int | None = None
+    user_name: str = "Сотрудник"
+
+
 class Feedback(BaseModel):
     query_id: int
     value: str
@@ -150,6 +156,22 @@ def stats():
                             FROM query_log ORDER BY id DESC LIMIT 30""").fetchall()
         tk = c.execute("SELECT count(*) FILTER (WHERE status='open') AS open, count(*) AS total FROM tickets").fetchone()
     return {"summary": s, "last": last, "tickets": tk}
+
+
+@app.post("/api/report")
+def report(req: Report):
+    """Сотрудник не меняет регламенты, но может сообщить о несоответствии/противоречии → запрос в службу качества."""
+    with db.conn() as c:
+        q = c.execute("SELECT question, answer, citations FROM query_log WHERE id=%s", (req.query_id,)).fetchone() if req.query_id else None
+        body = f"Сотрудник {req.user_name} сообщает о несоответствии в регламентах:\n\n{req.text}\n"
+        if q:
+            body += (f"\nВопрос: {q['question']}\nОтвет агента: {q['answer']}\nИсточники: "
+                     + "; ".join(c_["source"] for c_ in (q["citations"] or [])))
+        tid = c.execute("""INSERT INTO tickets(user_name,question,context,mail_to,mail_body)
+                           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                        (req.user_name, "Несоответствие: " + req.text, json.dumps({"type": "inconsistency", "query_id": req.query_id}),
+                         agent.config.QUALITY_EMAIL, body)).fetchone()["id"]
+    return {"ok": True, "ticket_id": tid}
 
 
 @app.post("/api/feedback")

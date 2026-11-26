@@ -194,7 +194,7 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         quote = cit.get("quote", "")
         if e and len(norm(quote)) >= 8 and norm(quote) in norm(e["text"]):
             valid.append({"id": cit["id"], "quote": quote, "source": fragment_label(e) if e["kind"] == "chunk"
-                          else f"Разъяснение службы качества (запрос № {e['ticket_id']})", "doc_id": e.get("doc_id"),
+                          else f"Практика применения: разъяснение службы качества (запрос № {e['ticket_id']})", "doc_id": e.get("doc_id"),
                           "clause_no": e.get("clause_no"), "kind": e["kind"]})
         else:
             bad.append(cit)
