@@ -312,9 +312,19 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         yield from done(result)
         return
     gap_names = [x["dst_ref_text"] for x in gaps]
-    yield from done({"status": "answer", "answer": out.get("answer", ""), "steps": out.get("steps", []),
-                     "caveat": out.get("caveat", ""), "citations": valid, "gaps": gap_names,
-                     "used_kb": any(c["kind"] == "kb" for c in valid)})
+    result = {"status": "answer", "answer": out.get("answer", ""), "steps": out.get("steps", []),
+              "caveat": out.get("caveat", "").strip(), "citations": valid, "gaps": gap_names,
+              "used_kb": any(c["kind"] == "kb" for c in valid)}
+    # Ответ с оговоркой (неполный/спорный) → дополнительно письмо в службу качества: заказчик — «сотрудник не должен
+    # остаться без ответа: если ответ неоднозначен, в любом случае отправляем в службу качества».
+    if result["caveat"] and not result["used_kb"]:
+        esc = escalate(full_q + f"\n(Агент ответил частично, оговорка: {result['caveat']})", department, user_name, user_email, gaps)
+        result["also_escalated"] = True
+        result["ticket_id"] = esc["ticket_id"]
+        result["caveat"] += (f" Я также отправил вопрос в службу качества ({config.QUALITY_EMAIL})"
+                             + (f", вы в копии" if user_email else "") + " — точный ответ придёт на почту.")
+        yield step(esc["step"] + " (ответ с оговоркой)", tool="escalate")
+    yield from done(result)
 
 
 def escalate(question, department, user_name, user_email, gaps) -> dict:
