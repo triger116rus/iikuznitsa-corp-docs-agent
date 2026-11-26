@@ -56,7 +56,7 @@ async function ask(text) {
       }
     }
   } catch (e) { box.querySelector(".res").textContent = "Ошибка соединения: " + e; }
-  busy = false; $("#sendBtn").disabled = false; $("#q").focus(); $("#userEmail").value = localStorage.getItem("userEmail") || "";
+  busy = false; $("#sendBtn").disabled = false; $("#q").focus({preventScroll: true}); box.scrollIntoView({block: "end"}); $("#userEmail").value = localStorage.getItem("userEmail") || "";
 $("#userEmail").onchange = () => localStorage.setItem("userEmail", $("#userEmail").value);
 $("#pollMail").onclick = async () => { const r = await (await fetch("/api/mail/poll", {method: "POST"})).json(); loadQuality(); loadOpenCount();
   $("#pollMail").textContent = `Проверить почту сейчас (обработано писем: ${r.processed})`; };
