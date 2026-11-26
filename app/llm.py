@@ -60,7 +60,10 @@ def parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", text, flags=re.S)
-        return json.loads(m.group(0)) if m else {}
+        try:
+            return json.loads(m.group(0)) if m else {}
+        except json.JSONDecodeError:   # оборванный вывод (лимит токенов) — пусто, агент не отвечает от себя
+            return {}
 
 
 def embed(texts: list[str]) -> list[list[float]]:

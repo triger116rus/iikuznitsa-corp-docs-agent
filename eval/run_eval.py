@@ -48,8 +48,8 @@ def main():
             (not q.get("kb") or any(c.get("kind") == "kb" for c in final.get("citations", [])))
         hallucination = q["expect"] in ("escalated", "out_of_scope") and final.get("status") == "answer"             and not final.get("also_escalated")
         rows.append({"id": q["id"], "case": q["case"], "q": q["q"], "first": status, "final": final.get("status"),
-                     "ok": ok_first and ok_final and ok_clause, "ok_clause": ok_clause, "cited": cited,
-                     "hallucination": hallucination, "sec": round(time.time() - t0, 1), "turns": turns,
+                     "ok": bool(ok_first and ok_final and ok_clause), "ok_clause": ok_clause, "cited": cited,
+                     "hallucination": bool(hallucination), "sec": round(time.time() - t0, 1), "turns": turns,
                      "tokens_in": final.get("tokens_in", 0) + (r.get("tokens_in", 0) if turns == 2 else 0),
                      "tokens_out": final.get("tokens_out", 0) + (r.get("tokens_out", 0) if turns == 2 else 0),
                      "answer": (final.get("answer") or final.get("text") or "")[:300]})
