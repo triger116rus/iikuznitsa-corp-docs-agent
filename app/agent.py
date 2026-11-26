@@ -48,7 +48,10 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
    и в caveat одной фразой напиши оговорку: какой части ответа в регламенте нет. О том, что не спрашивали, не пиши.
 5. Сначала выпиши цитаты из фрагментов, затем ответ, затем status. Каждое утверждение подтверди цитатой:
    id фрагмента и ДОСЛОВНАЯ фраза из него (5–12 слов, без изменений), 1–3 цитаты.
-   Цитируй только фрагменты, которые прямо отвечают на вопрос. На вопрос «кто делает X» отвечай по фрагменту,
+   Цитируй только фрагменты, которые прямо отвечают на вопрос. Числа, суммы, сроки и пороги из вопроса, которых
+   нет во фрагментах, не подтверждай: ответь тем, что есть в регламенте, и в caveat скажи, что такого условия там нет.
+6. Сотрудники часто спрашивают с неверной посылкой (не та роль, не тот срок, не тот этап). Не соглашайся с ней:
+   ответь, как написано в регламенте, и мягко поправь («Это делает не АМ, а SS: …»). На вопрос «кто делает X» отвечай по фрагменту,
    где назван исполнитель именно действия X (тот, кто X выполняет), а не фрагменту, где X лишь упоминается.
 Сокращения в регламентах: {GLOSSARY}. Вопрос и фрагмент могут называть роль полностью или сокращением — это одно и то же.
 Верни только JSON."""
@@ -172,7 +175,10 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     yield step("Разбираю вопрос и составляю план поиска", tool="plan")
     plan = llm.chat_json(SYS_PLAN, full_q, usage, max_tokens=150, slot=0)
     subqueries = [q for q in plan.get("subqueries", []) if isinstance(q, str)][:3]
-    if plan.get("in_scope") is False and not search.kb_search(full_q, department):
+    # «Вне регламентов» — только если и модель так считает, и в регламентах нет близких пунктов
+    # (страховка от ошибки модели: «арбитраж при низкой маржинальности» — рабочий процесс, а не болтовня).
+    if (plan.get("in_scope") is False and not search.kb_search(full_q, department)
+            and max(search.department_scores([question]).values() or [0]) < RELEVANCE_MIN):
         yield step("Вопрос не о правилах и процессах компании — регламенты к нему не относятся", tool="check")
         yield from done({"status": "out_of_scope", "answer": OUT_OF_SCOPE, "citations": []})
         return
@@ -278,6 +284,16 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     yield step(f"Модель: {verdict}. Проверил цитаты кодом: подтверждено {len(valid)}, отклонено {len(bad)}", tool="verify",
                detail=[f"отклонена: [{b.get('id')}] {b.get('quote')}" for b in bad])
 
+    # Числа в ответе (суммы, сроки, проценты) должны быть в цитируемых пунктах — иначе оговорка кодом.
+    if status == "answer" and valid:
+        cited_text = " ".join(evidence[str(c["id"]).strip("[] ")]["text"] for c in valid)
+        clause_nos = {str(e.get("clause_no")) for e in evidence.values()}
+        missing = [n for n in dict.fromkeys(re.findall(r"\d+(?:[.,]\d+)?", out.get("answer", "")))
+                   if n not in clause_nos and n not in cited_text and n.replace(",", ".") not in cited_text]
+        if missing:
+            note = "В регламенте не указано: " + ", ".join(missing) + " — это условие из вопроса, регламент его не подтверждает."
+            out["caveat"] = (out.get("caveat", "") + " " + note).strip()
+            yield step(f"Проверка чисел кодом: в цитатах нет {', '.join(missing)} — добавил оговорку", tool="verify")
     if status == "answer" and not valid:
         status = "not_found"
         yield step("Ответ не подтверждён дословными цитатами — недостоверный ответ не показываю", tool="verify")
