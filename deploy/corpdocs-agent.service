@@ -1,0 +1,15 @@
+[Unit]
+Description=ИИ-агент по корпоративным регламентам (FastAPI)
+After=network-online.target postgresql.service llama-chat.service llama-embed.service
+Wants=postgresql.service llama-chat.service llama-embed.service
+
+[Service]
+User=stand
+WorkingDirectory=/srv/stand/app
+Environment=DB_DSN=dbname=corpdocs
+ExecStart=/srv/stand/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 120
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

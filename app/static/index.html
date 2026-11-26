@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ИИ-агент по корпоративным регламентам</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">ИИ-агент по регламентам <span>ответы строго по документам · локальная модель</span></div>
+  <nav>
+    <button data-tab="chat" class="active">Чат</button>
+    <button data-tab="quality">Служба качества <b id="openCount"></b></button>
+    <button data-tab="docs">Документы и граф</button>
+    <button data-tab="stats">Аналитика</button>
+  </nav>
+</header>
+
+<main>
+<section id="chat" class="tab active">
+  <div class="chat-col">
+    <div id="messages"></div>
+    <div class="examples" id="examples"></div>
+    <form id="askForm">
+      <input id="q" autocomplete="off" placeholder="Задайте вопрос по регламентам, например: кто назначает руководителя проекта?">
+      <button type="submit" id="sendBtn">Спросить</button>
+      <button type="button" id="newDialog" title="Начать новый диалог">Новый диалог</button>
+    </form>
+  </div>
+  <aside class="side">
+    <label>Сотрудник <input id="userName" value="Иванова Анна"></label>
+    <h3>Мои запросы в службу качества</h3>
+    <div id="myTickets" class="tickets small"></div>
+  </aside>
+</section>
+
+<section id="quality" class="tab">
+  <p class="hint">Вопросы, на которые в регламентах нет ответа. Агент не ответил от себя, а создал запрос и письмо в службу качества.
+  Ответ сотрудника службы качества уходит пользователю и пополняет базу знаний агента с привязкой к пункту регламента.</p>
+  <div id="ticketList" class="tickets"></div>
+  <h3>База разъяснений службы качества (дообучение)</h3>
+  <div id="kbList"></div>
+</section>
+
+<section id="docs" class="tab">
+  <div id="docList"></div>
+  <h3>Граф связей</h3>
+  <p class="hint">Рёбра извлечены при загрузке: ссылки пунктов на разделы и на другие документы/процессы, упоминания ролей.
+  Документы, на которые ссылаются регламенты, но которых нет в базе, — пробелы: вопросы по ним агент передаёт в службу качества.</p>
+  <div id="graph"></div>
+  <div id="gaps"></div>
+  <div id="docView"></div>
+</section>
+
+<section id="stats" class="tab">
+  <div id="statsBox"></div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
