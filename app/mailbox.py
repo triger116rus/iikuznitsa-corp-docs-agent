@@ -16,7 +16,7 @@ from email.utils import parseaddr
 from . import config, kb
 
 TAG = re.compile(r"\[Регламенты #(\d+)\]")
-QUOTE_START = re.compile(r"^(>|-{2,}\s*Original|-{2,}\s*Исходное|.*(пишет|wrote):\s*$|От:|From:)", re.I)
+QUOTE_HEADER = re.compile(r"^.{0,160}(писал|пишет|wrote).*:\s*$", re.I)
 
 
 def subject_for(ticket_id: int, question: str) -> str:
@@ -42,24 +42,33 @@ def send(to: str, subject: str, body: str, cc: str | None = None) -> bool:
 
 
 def _text(msg) -> str:
+    """Текст ответа службы качества без цитаты исходного письма. Работает и для ответа над цитатой,
+    и для ответа под цитатой (так по умолчанию отвечает веб-почта Reg.ru/Roundcube)."""
     part = None
-    if msg.is_multipart():
-        for p in msg.walk():
-            if p.get_content_type() == "text/plain" and not p.get_filename():
-                part = p
-                break
-    else:
-        part = msg
+    for p in (msg.walk() if msg.is_multipart() else [msg]):
+        if p.get_content_type() == "text/plain" and not p.get_filename():
+            part = p
+            break
     if part is None:
         return ""
     raw = part.get_payload(decode=True) or b""
     text = raw.decode(part.get_content_charset() or "utf-8", errors="replace")
-    lines = []
+    paras, cur = [], []
     for line in text.splitlines():
-        if QUOTE_START.match(line.strip()):
+        s_ = line.strip()
+        if s_.startswith(">") or QUOTE_HEADER.match(s_) or s_ in ("--", "-- "):
+            continue
+        if re.match(r"^-{2,}\s*(Original|Исходное)", s_, re.I):
             break
-        lines.append(line)
-    return "\n".join(lines).strip()
+        if not s_:
+            if cur:
+                paras.append(" ".join(cur))
+                cur = []
+            continue
+        cur.append(s_)
+    if cur:
+        paras.append(" ".join(cur))
+    return "\n".join(paras).strip()
 
 
 def poll_once() -> int:
