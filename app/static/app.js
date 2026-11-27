@@ -77,7 +77,7 @@ function addMsg(cls, html) {
   return d;
 }
 
-async function ask(text) {
+async function ask(text, nocache = false) {
   const q = (text ?? $("#q").value).trim();
   if (!q || busy) return;
   busy = true; $("#sendBtn").disabled = true; $("#q").value = ""; $("#examples").style.display = "none";
@@ -86,7 +86,7 @@ async function ask(text) {
   const stepsEl = box.querySelector(".steps"); stepsEl.innerHTML = "";
   try {
     const r = await api("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: q, dialog_id: dialogId, user_email: $("#userEmail").value})});
+      body: JSON.stringify({message: q, dialog_id: dialogId, user_email: $("#userEmail").value, nocache})});
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
     while (true) {
@@ -100,7 +100,7 @@ async function ask(text) {
           if (ev.tool === "answer") box.querySelector(".res").innerHTML = `<span class="badge answer">Выписываю дословные цитаты из пунктов…</span>`; }
         else if (ev.type === "sources") renderSources(box.querySelector(".src"), ev);
         else if (ev.type === "partial") box.querySelector(".res").innerHTML = `<span class="badge answer">Черновик — проверяю цитаты…</span><div class="answer-text">${esc(ev.answer)}<span class="caret">▍</span></div>`;
-        else if (ev.type === "result") renderResult(box.querySelector(".res"), ev);
+        else if (ev.type === "result") renderResult(box.querySelector(".res"), ev, q);
         else if (ev.type === "error") box.querySelector(".res").innerHTML = `<span class="badge escalated">Ошибка</span> ${esc(ev.text)}`;
         box.scrollIntoView({block: "end"});
       }
@@ -125,12 +125,14 @@ function stepHtml(ev) {
   return `<div class="${ev.tool || ""}"><span class="t">${(ev.ms / 1000).toFixed(1)} с</span>${esc(ev.text)}${det}</div>`;
 }
 
-function renderResult(el, r) {
+function renderResult(el, r, asked) {
   dialogId = r.dialog_id;
   const label = {answer: "Ответ по регламенту", clarify: "Нужно уточнение", escalated: "Письмо в службу качества", out_of_scope: "Вне регламентов"}[r.status] || r.status;
   let h = `<span class="badge ${r.status}">${label}</span><div class="answer-text">${esc(r.answer)}</div>`;
   if (r.scope_note) h += `<div class="meta scope">${esc(r.scope_note)}</div>`;
-  if (r.from_cache) h += `<div class="meta scope">Мгновенный ответ: такой же вопрос уже задавали (запрос № ${r.from_cache}), регламенты и разъяснения с тех пор не менялись.</div>`;
+  if (r.from_cache && r.cache_question) h += `<div class="meta scope">Мгновенный ответ на тот же по смыслу вопрос: «${esc(r.cache_question)}» (запрос № ${r.from_cache}); регламенты и разъяснения с тех пор не менялись.
+      <button class="recheck">Это другой вопрос — ответить заново</button></div>`;
+  else if (r.from_cache) h += `<div class="meta scope">Мгновенный ответ: такой же вопрос уже задавали (запрос № ${r.from_cache}), регламенты и разъяснения с тех пор не менялись.</div>`;
   if (r.caveat) h += `<div class="caveat">Оговорка: ${esc(r.caveat)}</div>`;
   if (r.steps && r.steps.length) h += `<ol class="steps-list">${r.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>`;
   if (r.options && r.options.length) h += `<div class="options">${r.options.map(o => `<button>${esc(o)}</button>`).join("")}</div>`;
@@ -146,6 +148,12 @@ function renderResult(el, r) {
         <span class="fb"><button class="rep">⚠ сообщить о несоответствии</button></span></div>`;
   el.innerHTML = h;
   el.querySelectorAll(".options button").forEach(b => b.onclick = () => ask(b.textContent));
+  const re = el.querySelector(".recheck");
+  if (re && asked) re.onclick = async () => {   // отметка в журнале — статистика для настройки смыслового кэша
+    re.disabled = true;
+    await api("/api/feedback", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({query_id: r.query_id, value: "other_question"})});
+    ask(asked, true);
+  };
   el.querySelectorAll(".cite[data-doc]").forEach(c => c.onclick = () => openDoc(+c.dataset.doc, c.dataset.clause));
   el.querySelector(".rep").onclick = async () => {
     const text = prompt("Что не так? Например: регламенты противоречат друг другу, пункт устарел, ответ неточен");

@@ -135,3 +135,5 @@ ALTER TABLE query_log ADD COLUMN IF NOT EXISTS result jsonb;
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS cache_key text;
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS corpus_ver text;
 CREATE INDEX IF NOT EXISTS query_log_cache ON query_log(cache_key, corpus_ver);
+-- 27.11: смысловой кэш — эмбеддинг вопроса (тот же вопрос другими словами, см. agent.similar_cached).
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS q_emb vector(1024);

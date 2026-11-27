@@ -7,6 +7,7 @@ run() — генератор событий для интерфейса: {"type"
 в службу качества с сотрудником в копии; вопрос не о регламентах — «обратитесь к руководителю».
 """
 import json
+import os
 import re
 import time
 import uuid
@@ -415,6 +416,15 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     if not pending and not n_clar and not all_variants and not followup:
         cache.update(key=f"{norm(question)}|{department or ''}", ver=corpus_version())
         hit = None if nocache else cached_answer(cache["key"], cache["ver"])
+        if not hit and not nocache:
+            cache["vec"] = llm.embed([cache_text(question)])[0]
+            hit = similar_cached(question, department, cache["ver"], cache["vec"])
+        if hit and hit.get("sim") is not None:
+            yield step(f"Тот же по смыслу вопрос уже задавали: «{hit['question'][:120]}» (запрос № {hit['id']}, совпадают "
+                       "числа, отрицания, подразделение и роли); регламенты и разъяснения с тех пор не менялись — "
+                       "показываю проверенный ответ", tool="cache")
+            yield from done(hit["result"] | {"from_cache": hit["id"], "cache_question": hit["question"]})
+            return
         if hit:
             yield step(f"Такой же вопрос уже задавали (запрос № {hit['id']}); регламенты и разъяснения с тех пор "
                        "не менялись — показываю проверенный ответ без повторной генерации", tool="cache")
@@ -751,6 +761,46 @@ def cached_answer(key: str, ver: str) -> dict | None:
                             ORDER BY id DESC LIMIT 1""", (key, ver)).fetchone()
 
 
+# Смысловой кэш: тот же вопрос другими словами («Кем назначается РП в Дирекции ИБ?»). Одной близости эмбеддингов мало —
+# «Можно ли…» / «Нельзя ли…» близки на 0,98, «5 дней» / «3 дня» — на 0,97 (замер 27.11), поэтому ответ берётся только
+# при близости ≥ порога И совпадении фактов вопроса: числа, отрицания, вопросительное слово, подразделения, роли.
+# Сотрудник видит, на какой вопрос был дан ответ, и может попросить ответить заново (отметка в журнале — для настройки).
+SEM_CACHE_SIM = float(os.getenv("SEM_CACHE_SIM", "0.95"))
+QGROUPS = {
+    "кто": r"\b(кто|кем|кому|кого|чей|чья|чье|чьи)\b", "когда": r"\b(когда|срок\w*)\b", "где": r"\b(где|куда|откуда)\b",
+    "сколько": r"\bсколько\b", "какой": r"\bкак(ой|ая|ое|ие|ого|ую|им|ими|ов|ова)\b", "как": r"\bкак\b",
+    "можно": r"\b(можно|разреш\w*|вправе|допуска\w*|могу|может|могут)\b",
+    "нужно": r"\b(нужно|надо|должен|должна|должны|обязан\w*|требуется)\b", "что": r"\bчто\b",
+    "почему": r"\b(почему|зачем)\b", "если": r"\bесли\b",
+}
+NEG_RE = r"\b(не|нет|нельзя|без|запрещ\w*|кроме|ни)\b"
+
+
+def cache_text(q: str) -> str:
+    return norm(with_abbreviations(q) or q)
+
+
+def cache_facts(q: str) -> tuple:
+    t = cache_text(q)
+    roles = frozenset(a for a in ROLES if re.search(rf"(?<![\w-]){re.escape(a.lower())}(?![\w-])", t))
+    return (frozenset(re.findall(r"\d+", t)), frozenset(re.findall(NEG_RE, t)), frozenset(detect_departments(q)),
+            roles, frozenset(g for g, p in QGROUPS.items() if re.search(p, t)))
+
+
+def similar_cached(question: str, department: str | None, ver: str, vec) -> dict | None:
+    """Проверенный ответ на тот же по смыслу вопрос (то же подразделение, та же версия базы) — см. SEM_CACHE_SIM."""
+    with db.conn() as c:
+        rows = c.execute("""SELECT id, question, result, 1 - (q_emb <=> %(v)s::vector) AS sim FROM query_log
+                            WHERE corpus_ver = %(ver)s AND q_emb IS NOT NULL AND split_part(cache_key, '|', 2) = %(dep)s
+                              AND outcome = 'answered' AND result IS NOT NULL AND coalesce(feedback, '') <> 'down'
+                              AND coalesce(result->>'caveat', '') = ''
+                              AND jsonb_array_length(coalesce(result->'citations', '[]'::jsonb)) > 0
+                            ORDER BY q_emb <=> %(v)s::vector LIMIT 3""",
+                         {"v": vec, "ver": ver, "dep": department or ""}).fetchall()
+    facts = cache_facts(question)
+    return next((r for r in rows if r["sim"] >= SEM_CACHE_SIM and cache_facts(r["question"]) == facts), None)
+
+
 def finalize(dialog_id, state, question, result, steps, usage, t0, user_name, user_login=None, cache=None):
     save_dialog(dialog_id, state)
     latency = int((time.time() - t0) * 1000)
@@ -759,12 +809,13 @@ def finalize(dialog_id, state, question, result, steps, usage, t0, user_name, us
     cache = cache or {}
     with db.conn() as c:
         qid = c.execute("""INSERT INTO query_log(dialog_id,user_name,user_login,question,outcome,steps,citations,answer,tokens_in,
-                           tokens_out,llm_calls,latency_ms,result,cache_key,corpus_ver)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                           tokens_out,llm_calls,latency_ms,result,cache_key,corpus_ver,q_emb)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (dialog_id, user_name, user_login, question, outcome, json.dumps(steps, ensure_ascii=False, default=str),
                          json.dumps(result.get("citations", []), ensure_ascii=False), result.get("answer"),
                          usage.tokens_in, usage.tokens_out, usage.calls, latency,
                          json.dumps({k: v for k, v in result.items() if k not in ("from_cache", "ticket_id")},
                                     ensure_ascii=False, default=str),
-                         None if result.get("from_cache") else cache.get("key"), cache.get("ver"))).fetchone()["id"]
+                         None if result.get("from_cache") else cache.get("key"), cache.get("ver"),
+                         None if result.get("from_cache") else cache.get("vec"))).fetchone()["id"]
     yield {"type": "result", "dialog_id": dialog_id, "query_id": qid, "latency_ms": latency} | usage.as_dict() | result
