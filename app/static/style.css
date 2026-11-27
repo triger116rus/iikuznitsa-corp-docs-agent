@@ -94,3 +94,5 @@ tr.off td { color: #aaa; }
 .seealso .cite small { display: block; color: #666; }
 .btn{display:inline-block;padding:6px 12px;border:1px solid #c8102e;border-radius:6px;color:#c8102e;text-decoration:none;font-size:14px}
 .btn:hover{background:#c8102e;color:#fff}
+.bar{display:inline-block;height:10px;background:#c8102e;border-radius:3px;vertical-align:middle}
+.hints{margin:6px 0 14px;color:#444}

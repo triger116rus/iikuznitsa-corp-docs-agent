@@ -328,7 +328,9 @@ def stats(request: Request):
                             WHERE q.outcome='answered' GROUP BY 1,2,3,4,5 ORDER BY uses DESC LIMIT 10""").fetchall()
         for h in hot:
             h["proposal"] = proposal(c, h)
-    return {"summary": s, "last": last, "tickets": tk, "hot": hot}
+        from . import perf
+        bn = perf.from_db(c)   # узкие места: время этапов агента по журналу
+    return {"summary": s, "last": last, "tickets": tk, "hot": hot, "perf": bn}
 
 
 # Порог «разъяснение относится к этому разделу» выше порога поиска: замер 26.11 — несвязанные разделы

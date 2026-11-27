@@ -341,10 +341,26 @@ async function loadStats() {
     <div class="kpi ${s.tickets.overdue ? "over" : ""}"><b>${s.tickets.overdue}</b><span>ответов службы качества просрочено</span></div></div>
     ${s.hot.length ? `<h3>Частые вопросы, закрытые разъяснениями службы качества — кандидаты на внесение в регламент</h3><table><tr><th>Вопрос</th><th>Разъяснение</th><th>Предложение агента по регламенту</th><th>Использовано раз</th></tr>` +
       s.hot.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}</td><td>${esc(x.proposal || "—")}</td><td>${x.uses}</td></tr>`).join("") + "</table>" : ""}
+    ${perfHtml(s.perf)}
     <h3>Журнал вопросов</h3>
     <table><tr><th>Время</th><th>Сотрудник</th><th>Вопрос</th><th>Итог</th><th>с</th><th>Токены</th><th>Оценка</th></tr>` +
     s.last.map(q => `<tr><td>${fmt(q.ts)}</td><td>${esc(q.user_name)}</td><td>${esc(q.question)}</td><td>${q.outcome}</td>
       <td>${(q.latency_ms / 1000).toFixed(1)}</td><td>${q.tokens_in}→${q.tokens_out}</td><td>${q.feedback ?? ""}</td></tr>`).join("") + "</table>";
+}
+
+// Узкие места: время этапов агента по журналу (последние 500 вопросов) и подсказка, что тормозит.
+function perfHtml(p) {
+  if (!p || !p.queries) return "";
+  const sec = ms => ms == null ? "—" : (ms / 1000).toFixed(1) + " с";
+  return `<h3>Производительность и узкие места (последние ${p.queries} вопросов)</h3>
+    <div class="kpis"><div class="kpi"><b>${sec(p.p50_ms)}</b><span>медиана времени ответа</span></div>
+    <div class="kpi"><b>${sec(p.p95_ms)}</b><span>95 % вопросов быстрее</span></div>
+    <div class="kpi ${p.slow_share >= 0.3 ? "over" : ""}"><b>${Math.round(p.slow_share * 100)} %</b><span>ответов дольше минуты</span></div>
+    <div class="kpi"><b>${p.gen_tokens_per_s ?? "—"}</b><span>выходных ток/с на этапе ответа (с чтением контекста)</span></div></div>
+    <table><tr><th>Этап</th><th>Вопросов</th><th>Медиана</th><th>95-й перцентиль</th><th>Доля общего времени</th></tr>` +
+    p.stages.map(x => `<tr><td>${esc(x.stage)}</td><td>${x.n}</td><td>${sec(x.p50_ms)}</td><td>${sec(x.p95_ms)}</td>
+      <td><span class="bar" style="width:${Math.round(x.share * 120)}px"></span> ${Math.round(x.share * 100)} %</td></tr>`).join("") +
+    `</table><ul class="hints">${p.hints.map(h => `<li>${esc(h)}</li>`).join("")}</ul>`;
 }
 
 // ---------- пользователи (администратор) ----------

@@ -19,7 +19,7 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 
-from . import config, db
+from . import config, db, perf
 
 LEVELS = ("metrics", "masked")
 
@@ -134,7 +134,7 @@ def export(level: str = "metrics", days: int = 30) -> bytes:
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(), "level": level, "days": days,
         "queries": len(out_logs), "outcomes": by_outcome,
-        "latency_ms": {"p50": pct(0.5), "p90": pct(0.9), "max": lat[-1] if lat else None},
+        "latency_ms": {"p50": pct(0.5), "p95": pct(0.95), "max": lat[-1] if lat else None},
         "tokens_avg": {"in": round(sum(x["tokens_in"] or 0 for x in out_logs) / max(1, len(out_logs))),
                        "out": round(sum(x["tokens_out"] or 0 for x in out_logs) / max(1, len(out_logs)))},
         "cache": {"exact": sum(1 for x in out_logs if x["from_cache"] and not x["semantic_cache"]),
@@ -145,6 +145,7 @@ def export(level: str = "metrics", days: int = 30) -> bytes:
                      "down": sum(1 for x in out_logs if x["feedback"] == "down")},
         "tickets": {"total": len(out_tickets), "open": sum(1 for t in out_tickets if t["status"] == "open")},
         "kb_answers": len(out_kb), "documents_in_force": sum(1 for d in out_docs if d["status"] == "in_force"),
+        "perf": perf.bottlenecks(logs),   # время этапов и узкие места
         # Только несекретные настройки агента — по ним разбирают пороги и качество.
         "settings": _settings(),
     }
