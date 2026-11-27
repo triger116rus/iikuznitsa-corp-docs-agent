@@ -12,7 +12,7 @@ import threading
 import time
 from email.header import decode_header, make_header
 from email.message import EmailMessage
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 
 from . import config, kb
 
@@ -126,6 +126,7 @@ def poll_once() -> int:
                 continue   # пишет сам сотрудник (например, «Спасибо» через «Ответить всем») — не разъяснение
             tid = int(m.group(1))
             from_quality = sender == config.QUALITY_EMAIL.lower()
+            rcpt = {a.lower() for _, a in getaddresses(msg.get_all("To", []) + msg.get_all("Cc", []))}
             try:
                 if not answer:
                     continue
@@ -133,13 +134,17 @@ def poll_once() -> int:
                     kb.note_redirect(tid, answer, sender)
                 elif from_quality and REVOKE.match(answer):
                     kb.revoke(tid, sender)                      # служба качества отзывает ошибочное разъяснение
+                    notify_employee(tid, None, revoked=True)
                 elif from_quality and CONFIRM.match(answer):
-                    if kb.pending_answer(tid):
+                    p = kb.pending_answer(tid)
+                    if p:
                         kb.confirm_pending(tid, sender)         # служба качества подтвердила ответ владельца процесса
+                        notify_employee(tid, p["a"], confirmed=True)
                     else:
                         continue                                # подтверждать нечего — «Подтверждаю» не разъяснение
                 elif from_quality:
                     kb.add_answer(tid, answer, f"Служба качества ({sender})")
+                    notify_employee(tid, answer, already=rcpt)  # не нажали «Ответить всем» — сотрудник узнает от агента
                 else:
                     # Ответ владельца процесса (письмо переслала служба качества) — в базу только после подтверждения.
                     kb.note_pending(tid, answer, sender)
@@ -148,6 +153,36 @@ def poll_once() -> int:
             except KeyError:
                 pass
     return n
+
+
+def notify_employee(tid: int, answer: str | None, already=(), confirmed: bool = False, revoked: bool = False) -> bool:
+    """Письмо сотруднику, что на его запрос ответили: держать окно агента открытым не нужно.
+    Не шлём, если сотрудник уже получил этот ответ (был среди получателей письма службы качества) или e-mail неизвестен."""
+    c = kb.ticket_contact(tid)
+    to = c["email"]
+    if not to or to in already or to in (config.QUALITY_EMAIL.lower(), (config.MAIL_USER or "").lower()):
+        return False
+    q = " ".join(c["question"].split("\n", 1)[0].split())
+    if revoked:
+        subj, head = "Разъяснение отозвано", (f"Служба качества отозвала разъяснение по вашему запросу № {tid}. "
+                                             "Запрос снова открыт — окончательный ответ придёт отдельным письмом.")
+        body_answer = ""
+    else:
+        subj = "Ответ на ваш вопрос"
+        head = (f"Служба качества подтвердила ответ владельца процесса на ваш запрос № {tid}." if confirmed
+                else f"Служба качества ответила на ваш запрос № {tid}.")
+        body_answer = f"Ответ:\n{answer}\n\n"
+    body = (f"Здравствуйте!\n\n{head}\n\nВаш вопрос: «{q}»\n\n{body_answer}"
+            f"{'Статус запроса' if revoked else 'Ответ'} также виден в ИИ-агенте по регламентам в разделе «Мои запросы»."
+            "\n\nИИ-агент по регламентам")
+    try:
+        sent = send(to, f"[Регламенты #{tid}] {subj}", body)
+    except Exception as e:   # почта/лимит: ответ всё равно есть в «Мои запросы»
+        print(f"[mailbox] уведомление сотруднику #{tid} не отправлено: {type(e).__name__}", flush=True)
+        return False
+    if sent:
+        kb.note_notified(tid, to)
+    return sent
 
 
 def ask_confirmation(tid: int, answer: str, by: str) -> None:

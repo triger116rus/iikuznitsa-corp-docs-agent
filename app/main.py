@@ -193,7 +193,8 @@ def answer_ticket(tid: int, req: TicketAnswer, request: Request):
         kb_id = kb.add_answer(tid, req.answer, f"{u['name']} (служба качества)", req.doc_id, req.clause_no, req.add_to_kb)
     except KeyError:
         raise HTTPException(404, "нет такого запроса")
-    return {"ok": True, "kb_answer_id": kb_id}
+    notified = mailbox.notify_employee(tid, req.answer)
+    return {"ok": True, "kb_answer_id": kb_id, "notified": notified}
 
 
 @app.get("/api/settings")

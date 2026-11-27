@@ -44,11 +44,26 @@ def note_redirect(ticket_id: int, text: str, by: str) -> None:
                   (json.dumps({"redirect_note": text[:500], "redirect_by": by}, ensure_ascii=False), ticket_id))
 
 
+def ticket_contact(ticket_id: int) -> dict:
+    """Вопрос запроса и e-mail сотрудника: адрес копии письма, а если его не было — e-mail из учётной записи."""
+    with db.conn() as c:
+        r = c.execute("""SELECT t.question, coalesce(nullif(t.context->>'user_email', ''), u.email) AS e
+                         FROM tickets t LEFT JOIN users u ON u.login = t.user_login WHERE t.id=%s""",
+                      (ticket_id,)).fetchone()
+    return {"question": (r or {}).get("question") or "", "email": ((r or {}).get("e") or "").strip().lower()}
+
+
+def note_notified(ticket_id: int, to: str) -> None:
+    """Отметка в запросе: сотруднику отправлено уведомление об ответе (видно службе качества в журнале)."""
+    import json
+    with db.conn() as c:
+        c.execute("UPDATE tickets SET context = coalesce(context, '{}'::jsonb) || %s WHERE id=%s",
+                  (json.dumps({"notified_to": to}, ensure_ascii=False), ticket_id))
+
+
 def ticket_employee_email(ticket_id: int) -> str:
     """E-mail сотрудника, задавшего вопрос (в копии письма) — его ответы в базу разъяснений не берём."""
-    with db.conn() as c:
-        r = c.execute("SELECT context->>'user_email' AS e FROM tickets WHERE id=%s", (ticket_id,)).fetchone()
-    return ((r or {}).get("e") or "").strip().lower()
+    return ticket_contact(ticket_id)["email"]
 
 
 def note_pending(ticket_id: int, text: str, by: str) -> None:
