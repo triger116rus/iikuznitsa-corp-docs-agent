@@ -375,6 +375,19 @@ def report(req: Report, request: Request):
     return {"ok": True, "ticket_id": tid, "mail_sent": sent}
 
 
+@app.get("/api/diag/export")
+def diag_export(request: Request, level: str = "metrics", days: int = 30):
+    """Диагностическая выгрузка с обезличиванием (см. app/diag.py): тексты регламентов и ответов не выгружаются."""
+    auth.require(request, "admin")
+    from . import diag
+    if level not in diag.LEVELS:
+        raise HTTPException(400, f"level: {', '.join(diag.LEVELS)}")
+    data = diag.export(level, max(1, min(days, 365)))
+    name = f"corpdocs-diag-{level}-{time.strftime('%Y%m%d-%H%M')}.zip"
+    return StreamingResponse(io.BytesIO(data), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.post("/api/feedback")
 def feedback(req: Feedback, request: Request):
     u = auth.require(request)

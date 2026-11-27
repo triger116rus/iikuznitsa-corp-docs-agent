@@ -349,6 +349,8 @@ async function loadStats() {
 
 // ---------- пользователи (администратор) ----------
 async function loadUsers() {
+  const diagHref = () => $("#diagGo").href = `/api/diag/export?level=${$("#diagLevel").value}&days=${+$("#diagDays").value || 30}`;
+  $("#diagLevel").onchange = $("#diagDays").oninput = diagHref;
   const users = await (await api("/api/users")).json();
   const roleSel = (cur) => Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("");
   $("#userList").innerHTML = `<table><tr><th>Логин</th><th>Имя</th><th>E-mail</th><th>Подразделение</th><th>Роль</th><th>Последний вход</th><th></th></tr>` +
