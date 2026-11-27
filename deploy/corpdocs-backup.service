@@ -1,0 +1,9 @@
+[Unit]
+Description=Резервная копия ИИ-агента по регламентам (БД + загруженные регламенты)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=stand
+EnvironmentFile=-/srv/stand/app.env
+ExecStart=/srv/stand/app/deploy/backup.sh
