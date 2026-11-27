@@ -109,3 +109,29 @@ CREATE TABLE IF NOT EXISTS query_log (
     latency_ms   int,
     feedback     text
 );
+
+-- 27.11: загрузка документов через интерфейс — источник документа и сокращения, расшифрованные в нём самом.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'initial';   -- initial / upload
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS terms jsonb;
+
+-- 27.11: учётные записи и роли (сотрудник / служба качества / администратор), владелец запроса.
+CREATE TABLE IF NOT EXISTS users (
+    id          serial PRIMARY KEY,
+    login       text NOT NULL UNIQUE,
+    name        text NOT NULL,
+    email       text,
+    department  text,                 -- подразделение сотрудника: по умолчанию агент отвечает по его регламенту
+    role        text NOT NULL DEFAULT 'employee',   -- employee / quality / admin
+    pw_hash     text NOT NULL,        -- PBKDF2-SHA256 с солью
+    active      boolean NOT NULL DEFAULT true,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    last_login  timestamptz
+);
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_login text;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS user_login text;
+
+-- 27.11: мгновенный ответ на повторный вопрос — полный результат ответа и ключ (вопрос + подразделение + версия базы).
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS result jsonb;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS cache_key text;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS corpus_ver text;
+CREATE INDEX IF NOT EXISTS query_log_cache ON query_log(cache_key, corpus_ver);

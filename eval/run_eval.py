@@ -1,21 +1,37 @@
 """Прогон контрольных вопросов через API агента и отчёт о качестве.
 
-Запуск: python eval/run_eval.py [--url https://<стенд>] [--only A1,C1] [--out eval/report.md]
+Запуск: python eval/run_eval.py [--url https://<стенд>] [--questions eval/questions-holdout.json] [--only A1,C1] [--out eval/report.md]
 Метрики: верный исход (ответ / уточнение / запрос в службу качества), верный пункт в цитатах,
 галлюцинации (ответ там, где ответа в регламентах нет), время и токены на вопрос.
 Если агент задал уточняющий вопрос, скрипт отвечает за пользователя (поле reply) и проверяет итог.
 """
 import argparse
+import http.cookiejar
 import json
 import pathlib
 import time
 import urllib.request
 
+# Сессия учётной записи (стенд с входом): cookie сохраняется между запросами.
+OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+
+def login(url, cred_file, user):
+    """Вход под учётной записью; пароль — из файла учёток (логин<TAB>роль<TAB>пароль), в вывод не печатается."""
+    for line in pathlib.Path(cred_file).read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if parts and parts[0] == user:
+            body = json.dumps({"login": user, "password": parts[-1]}).encode()
+            OPENER.open(urllib.request.Request(url + "/api/login", data=body, headers={"Content-Type": "application/json"}), timeout=30)
+            return
+    raise SystemExit(f"нет учётки {user} в {cred_file}")
+
 
 def ask(url, msg, dialog=None):
-    body = json.dumps({"message": msg, "dialog_id": dialog, "user_name": "eval"}, ensure_ascii=False).encode("utf-8")
+    # nocache: каждый прогон проверяет генерацию заново, а не ответ на повторный вопрос из журнала стенда.
+    body = json.dumps({"message": msg, "dialog_id": dialog, "nocache": True}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url + "/api/ask", data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=900) as r:
+    with OPENER.open(req, timeout=900) as r:
         for line in r:
             if line.strip():
                 ev = json.loads(line)
@@ -28,9 +44,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8000")
     ap.add_argument("--only", default="")
+    ap.add_argument("--questions", default=str(pathlib.Path(__file__).parent / "questions.json"))
+    ap.add_argument("--cred", default="", help="файл учёток (логин<TAB>роль<TAB>пароль) — для стенда с входом")
+    ap.add_argument("--user", default="eval", help="учётная запись прогона (без подразделения в профиле)")
     ap.add_argument("--out", default=str(pathlib.Path(__file__).parent / "report.md"))
     a = ap.parse_args()
-    qs = json.loads((pathlib.Path(__file__).parent / "questions.json").read_text(encoding="utf-8"))
+    qs = json.loads(pathlib.Path(a.questions).read_text(encoding="utf-8"))
+    if a.cred:
+        login(a.url, a.cred, a.user)
     if a.only:
         qs = [q for q in qs if q["id"] in a.only.split(",")]
     rows = []

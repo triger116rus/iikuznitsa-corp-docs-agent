@@ -3,6 +3,7 @@
 - служба качества отвечает «ответить всем» обычным письмом; агент забирает ответ из своего ящика (IMAP),
   отмечает запрос отвеченным и добавляет ответ в базу разъяснений — следующий такой вопрос получает ответ.
 Письма связываются с запросом по метке [Регламенты #N] в теме. Без настроек SMTP/IMAP модуль ничего не делает."""
+import os
 import email
 import imaplib
 import re
@@ -32,9 +33,33 @@ def subject_for(ticket_id: int, question: str) -> str:
     return f"[Регламенты #{ticket_id}] Вопрос без ответа в регламентах: {q}"
 
 
+MAIL_PER_HOUR = int(os.getenv("MAIL_PER_HOUR", "40"))        # всего писем в час со стенда
+MAIL_PER_HOUR_CC = int(os.getenv("MAIL_PER_HOUR_CC", "8"))   # копий на один адрес в час
+_sent: list[tuple[float, str]] = []
+_sent_lock = threading.Lock()
+
+
+class MailLimit(Exception):
+    """Превышен лимит писем: стенд открыт в интернете, адрес копии вводит пользователь — защита ящика от рассылки."""
+
+
+def _check_limit(cc: str | None):
+    now = time.time()
+    with _sent_lock:
+        _sent[:] = [x for x in _sent if now - x[0] < 3600]
+        if len(_sent) >= MAIL_PER_HOUR:
+            raise MailLimit("лимит писем в час")
+        if cc and sum(1 for _, a in _sent if a == cc.lower()) >= MAIL_PER_HOUR_CC:
+            raise MailLimit("лимит писем на адрес копии")
+        _sent.append((now, (cc or "").lower()))
+
+
 def send(to: str, subject: str, body: str, cc: str | None = None) -> bool:
     if not (config.SMTP_HOST and config.MAIL_USER and config.MAIL_PASS):
         return False
+    if cc and not re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}", cc, re.I):
+        cc = None                     # некорректный адрес копии — письмо уходит только службе качества
+    _check_limit(cc)
     m = EmailMessage()
     m["From"] = f"ИИ-агент по регламентам <{config.MAIL_USER}>"
     m["To"] = to

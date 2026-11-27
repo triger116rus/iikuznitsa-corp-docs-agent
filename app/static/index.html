@@ -6,16 +6,30 @@
 <title>ИИ-агент по корпоративным регламентам</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="locked">
 <header>
   <div class="brand">ИИ-агент по регламентам <span>ответы строго по документам · локальная модель</span></div>
   <nav>
     <button data-tab="chat" class="active">Чат</button>
-    <button data-tab="quality">Служба качества <b id="openCount"></b></button>
-    <button data-tab="docs">Документы и граф</button>
-    <button data-tab="stats">Аналитика</button>
+    <button data-tab="quality" class="q-only">Служба качества <b id="openCount"></b></button>
+    <button data-tab="docs"><span class="q-only">Документы и граф</span><span class="e-only">Регламенты</span></button>
+    <button data-tab="stats" class="q-only">Аналитика</button>
+    <button data-tab="users" class="a-only">Пользователи</button>
   </nav>
+  <div class="mode"><span id="who"></span><button id="logout" title="Выйти">выйти</button></div>
 </header>
+
+<div id="login" class="login">
+  <h3>Вход</h3>
+  <p class="hint">Сотрудник — вопросы по регламентам и свои запросы в службу качества. Служба качества — запросы, база
+  разъяснений, граф и аналитика. Администратор — ещё загрузка регламентов и пользователи.</p>
+  <form id="loginForm">
+    <input id="loginName" placeholder="Логин" autocomplete="username">
+    <input id="loginPass" type="password" placeholder="Пароль" autocomplete="current-password">
+    <button>Войти</button> <span id="loginErr" class="over"></span>
+  </form>
+  <p class="hint">Прототип: учётные записи в базе агента. В продукте — вход через корпоративный каталог (AD/SSO).</p>
+</div>
 
 <main>
 <section id="chat" class="tab active">
@@ -29,7 +43,7 @@
     </form>
   </div>
   <aside class="side">
-    <label>Сотрудник <input id="userName" value="Иванова Анна"></label>
+    <div id="profile" class="profile"></div>
     <label>E-mail для копии писем <input id="userEmail" placeholder="name@company.ru"></label>
     <h3>Мои вопросы в службу качества</h3>
     <div id="myTickets" class="tickets small"></div>
@@ -38,8 +52,8 @@
 
 <section id="quality" class="tab">
   <p class="hint">Вопросы, на которые в регламентах нет ответа. Агент не ответил от себя и отправил письмо в службу качества,
-  сотрудник — в копии. Служба качества отвечает письмом «ответить всем»: агент сам забирает ответ из почты и добавляет его в базу
-  разъяснений. Ниже — журнал писем и запасной способ ответить прямо здесь (с привязкой к пункту регламента).</p>
+  сотрудник — в копии. Служба качества отвечает письмом «Ответить всем» или пересылает письмо владельцу процесса: агент сам
+  забирает ответ из почты; ответ владельца процесса попадает в базу разъяснений после «Подтверждаю» службы качества.</p>
   <button id="pollMail">Проверить почту сейчас</button>
   <div id="ticketList" class="tickets"></div>
   <h3>База разъяснений службы качества (дообучение)</h3>
@@ -47,17 +61,52 @@
 </section>
 
 <section id="docs" class="tab">
+  <details id="upload" class="upload a-only">
+    <summary>Загрузить регламент (DOCX) — новый документ или новая редакция</summary>
+    <p class="hint">Документ сразу разбирается на пункты (номера — из текста или автонумерации Word), получает эмбеддинги
+    и рёбра графа и участвует в поиске агента. Подразделение указывается здесь или берётся из названия документа;
+    новое подразделение агент начинает узнавать в вопросах сразу. Новая редакция заменяет прежнюю — та утрачивает силу.</p>
+    <div class="upform">
+      <label>Файл <input type="file" id="upFile" accept=".docx"></label>
+      <label>Подразделение <input id="upDep" list="depList" placeholder="например, Бухгалтерия"></label>
+      <datalist id="depList"></datalist>
+      <label>Процесс <input id="upProc" placeholder="необязательно"></label>
+      <label>Заменяет редакцию <select id="upRepl"><option value="">— новый документ —</option></select></label>
+      <button id="upGo">Загрузить</button>
+    </div>
+    <div id="upResult"></div>
+  </details>
   <div id="docList"></div>
+  <div class="q-only">
   <h3>Граф связей</h3>
-  <p class="hint">Рёбра извлечены при загрузке: ссылки пунктов на разделы и на другие документы/процессы, упоминания ролей.
-  Документы, на которые ссылаются регламенты, но которых нет в базе, — пробелы: вопросы по ним агент передаёт в службу качества.</p>
+  <p class="hint">Рёбра извлечены при загрузке: ссылки пунктов на разделы и на другие документы/процессы, упоминания ролей,
+  замена редакций. Документы, на которые ссылаются регламенты, но которых нет в базе, — пробелы: вопросы по ним агент
+  передаёт в службу качества.</p>
   <div id="graph"></div>
   <div id="gaps"></div>
+  </div>
   <div id="docView"></div>
 </section>
 
 <section id="stats" class="tab">
   <div id="statsBox"></div>
+</section>
+
+<section id="users" class="tab">
+  <p class="hint">Роли: сотрудник — чат и свои запросы; служба качества — плюс запросы всех сотрудников, база разъяснений,
+  граф и аналитика; администратор — плюс загрузка регламентов и пользователи. Подразделение сотрудника агент использует
+  по умолчанию, если в вопросе другое не названо.</p>
+  <div class="upform">
+    <label>Логин <input id="nuLogin" placeholder="ivanova"></label>
+    <label>Имя <input id="nuName" placeholder="Иванова Анна"></label>
+    <label>E-mail <input id="nuEmail" placeholder="name@company.ru"></label>
+    <label>Подразделение <input id="nuDep" list="nuDepList" placeholder="необязательно"></label>
+    <datalist id="nuDepList"></datalist>
+    <label>Роль <select id="nuRole"></select></label>
+    <button id="nuGo">Добавить</button>
+  </div>
+  <div id="userPw"></div>
+  <div id="userList"></div>
 </section>
 </main>
 <script src="/static/app.js"></script>

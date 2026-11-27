@@ -16,5 +16,12 @@ IMAP_HOST = os.getenv("IMAP_HOST", "")
 IMAP_PORT = int(os.getenv("IMAP_PORT", "993"))
 MAIL_USER = os.getenv("MAIL_USER", "")                               # ящик агента
 MAIL_PASS = os.getenv("MAIL_PASS", "")
+# Загрузка регламентов через интерфейс: код загрузки (пусто — загрузка выключена) и папка исходных файлов.
+# Вход и роли (app/auth.py): AUTH=0 — без входа (разработка). SESSION_SECRET — ключ подписи cookie сессии.
+AUTH = os.getenv("AUTH", "1") == "1"
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1") == "1"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "data/uploads")
+UPLOAD_MAX_MB = int(os.getenv("UPLOAD_MAX_MB", "10"))
 TOP_K = int(os.getenv("TOP_K", "6"))
 MAX_EVIDENCE_TOKENS = int(os.getenv("MAX_EVIDENCE_TOKENS", "800"))

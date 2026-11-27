@@ -19,7 +19,9 @@ def _configure(conn):
 def pool() -> ConnectionPool:
     global _pool
     if _pool is None:
-        _pool = ConnectionPool(config.DB_DSN, min_size=1, max_size=8, configure=_configure,
+        # check: соединение проверяется перед выдачей — после перезапуска PostgreSQL или обрыва сервером пул не отдаёт
+        # «мёртвое» соединение (слепой прогон 27.11, H01: AdminShutdown на первом же вопросе).
+        _pool = ConnectionPool(config.DB_DSN, min_size=1, max_size=8, configure=_configure, check=ConnectionPool.check_connection,
                                kwargs={"row_factory": dict_row, "autocommit": True})
     return _pool
 

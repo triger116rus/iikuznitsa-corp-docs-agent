@@ -32,7 +32,7 @@ AMBIGUITY_GAP = 0.05  # подразделения с близостью в пр
 DEP_ALIASES = {
     "Дирекция ИБ": r"\bИБ\b|\bДИБ\b|информационн\w* безопасност|дирекци\w* иб",
     "ДБРЦТ": r"ДБРЦТ|бизнес-решени|цифров\w* трансформац",
-    "Технологическая дирекция": r"тех\.?\s*дирекц|технологическ\w* дирекц|технической дирекц",
+    "Технологическая дирекция": r"тех\.?\s*дирекц|технологическ\w* дирекц|техническ\w* дирекц",   # «Техническая дирекция» — H17
 }
 ALL_VARIANTS = "Не знаю — покажите все варианты"
 OTHER_DEP = "Другое подразделение — в службу качества"
@@ -60,7 +60,10 @@ subqueries — 1–3 короткие поисковые фразы на рус�
 SYS_ANSWER = f"""Ты отвечаешь сотруднику компании СТРОГО по фрагментам регламентов и разъяснениям службы качества ниже.
 Правила:
 1. Используй только факты из фрагментов. Ничего не добавляй из общих знаний, не обобщай, не додумывай.
-2. Если во фрагментах ответа на вопрос нет — status="not_found".
+2. status="not_found" — только если НИ ОДИН фрагмент не отвечает НИ НА ОДНУ часть вопроса. Если фрагмент прямо
+   отвечает (перечисляет условия, называет срок, число, исполнителя, порядок) — это ответ, даже если вопрос задан
+   другими словами или от первого лица («я проджект…», «у нас…»). Если вопрос из нескольких частей и фрагменты
+   отвечают только на часть — status="answer" по этой части, а в caveat — какой части в регламенте нет.
 3. Если ответ зависит от условия, которого нет в вопросе (несколько разных сценариев в регламенте),
    и по вопросу нельзя выбрать один — status="clarify": задай ОДИН уточняющий вопрос и дай 2–4 варианта ответа.
 4. Иначе status="answer": ответ простым человеческим языком, без канцелярита и без искажения смысла, 1–3 предложения;
@@ -69,7 +72,8 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
    и в caveat одной фразой напиши оговорку: какой части ответа в регламенте нет. О том, что не спрашивали, не пиши.
 5. Сначала выпиши цитаты из фрагментов, затем ответ, затем status. Каждое утверждение подтверди цитатой:
    id фрагмента и ДОСЛОВНАЯ фраза из него (5–10 слов, без изменений), 1–2 цитаты.
-   Пиши кратко: ответ — 1–2 предложения; steps — только если вопрос «как сделать» (до 3 шагов), иначе пусто;
+   Пиши кратко: ответ — 1–3 предложения (перечень условий или документов — все его элементы через точку с запятой);
+   steps — только если вопрос «как сделать» (до 3 шагов), иначе пусто;
    caveat — одна короткая фраза или пусто.
    Цитируй только фрагменты, которые прямо отвечают на вопрос. Числа, суммы, сроки и пороги из вопроса, которых
    нет во фрагментах, не подтверждай: ответь тем, что есть в регламенте, и в caveat скажи, что такого условия там нет.
@@ -78,10 +82,20 @@ SYS_ANSWER = f"""Ты отвечаешь сотруднику компании �
    где назван исполнитель именно действия X (тот, кто X выполняет), а не фрагменту, где X лишь упоминается.
 8. Если в пункте перечислены условия или варианты («при одном из условий», список) — назови их все, не сокращай
    до одного. Не добавляй «только», «всегда», «никогда», если этих слов нет во фрагменте.
-7. Если разъяснение службы качества расходится с пунктом регламента — приоритет у разъяснения (регламент может быть
-   на актуализации): ответь по разъяснению, а в caveat одной фразой укажи, что пункт регламента пока говорит иначе.
+9. Если один фрагмент запрещает или ограничивает, а другой допускает исключение («кроме случаев», «допускается при»,
+   «в исключительных случаях», «по согласованию») — назови и правило, и исключение с его условиями; не отвечай
+   просто «нельзя» или «можно».
+7. Разъяснение службы качества дополняет регламент, но не отменяет его. Если разъяснение расходится с пунктом
+   регламента — ответь по пункту регламента, в caveat одной фразой скажи, что разъяснение службы качества ему
+   противоречит и что поступить иначе можно только по отдельному согласованию с руководителем, у которого есть
+   такие полномочия; поставь conflict=true. Если разъяснение не противоречит, а дополняет пункт — ответь по обоим.
 Сокращения в регламентах: {GLOSSARY}. Вопрос и фрагмент могут называть роль полностью или сокращением — это одно и то же.
 Верни только JSON."""
+
+SYS_CONFLICT = """Сравни разъяснение службы качества и пункты регламента компании. Противоречие — если разъяснение
+предписывает другое, чем пункт: другой исполнитель, другой срок, другое число, запрет вместо разрешения или наоборот.
+Если разъяснение говорит о другом случае или только дополняет пункт — противоречия нет.
+Верни только JSON: {"conflict": true или false, "why": "одна короткая фраза"}."""
 
 ANSWER_SCHEMA = {
     # Порядок полей = порядок генерации: сначала дословные цитаты, затем ответ, решение (status) — последним.
@@ -95,11 +109,15 @@ ANSWER_SCHEMA = {
         "caveat": {"type": "string"},
         "clarify_question": {"type": "string"},
         "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+        "conflict": {"type": "boolean"},
         "status": {"type": "string", "enum": ["answer", "clarify", "not_found"]},
     },
     "required": ["citations", "answer", "status"],
 }
 
+NUMBER = re.compile(r"(?<![\d.,])\d+(?:[.,]\d+)*")
+LIST_MARK = re.compile(r"(?:^|(?<=[\s:;]))\d{1,2}[).](?=\s)")   # «1) », «2. » — нумерация перечня в ответе
+KB_CONFLICT_SIM = 0.72   # как порог поиска разъяснений: найденное разъяснение сверяем с ответом по регламенту (замер 27.11: тот же вопрос — 0,76)
 PARTIAL_ANSWER = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)')
 
 OUT_OF_SCOPE = ("Этот вопрос не касается корпоративной базы регламентов, поэтому ответ на него я не даю. "
@@ -166,6 +184,20 @@ def rerank(question: str, hits: list[dict]) -> list[dict]:
     return sorted(hits, key=lambda h: -h["rank_score"])
 
 
+def merge_rankings(raw: list[dict], reranked: list[dict], k: int) -> list[dict]:
+    """В ответ идут первые 2 пункта обоих порядков: по смысловым словам вопроса и исходного гибридного поиска.
+    Бонус за слова сильнее разницы мест в гибридном поиске, поэтому один порядок мог вытеснить верный пункт другого:
+    «что приложить к заявке» — п. 2.2 («К заявке прикладываются») 2-й в гибридном поиске, но 7-й после
+    переупорядочивания (другие пункты делят с вопросом слова «закупка», «облачных»; тест загрузки 27.11).
+    Проверено на S3, T8, A5, A6: набор первых 4 пунктов не изменился или стал полнее. Вес слов по IDF пробовали —
+    S3 ухудшился (1-е место → 3-е), не взяли."""
+    top = []
+    for h in reranked[:2] + raw[:2] + reranked[2:]:
+        if h["id"] not in {x["id"] for x in top}:
+            top.append(h)
+    return top[:k]
+
+
 def quote_ok(quote: str, text: str) -> bool:
     """Цитата есть во фрагменте: дословно — или с другими окончаниями длинных слов (модель ставит «Ресурс-менеджер»
     вместо «Ресурс-менеджеру», eval A5). Все слова цитаты должны идти во фрагменте подряд, одним блоком; слова от 5 букв
@@ -183,11 +215,92 @@ def quote_ok(quote: str, text: str) -> bool:
     return any(ts[k:k + len(qs)] == qs for k in range(len(ts) - len(qs) + 1))
 
 
+def name_pattern(name: str) -> str:
+    """Шаблон поиска подразделения по его названию из базы: «Дирекция облачных решений» → основы слов подряд
+    («дирекции облачных решений»), сокращения — точно."""
+    parts = []
+    for w in re.findall(r"[\w-]+", name):
+        if w.isupper() and len(w) >= 2:
+            parts.append(rf"(?<![А-ЯЁA-Z]){re.escape(w)}(?![А-ЯЁA-Z])")
+        elif len(w) >= 4:
+            parts.append(re.escape(w[:max(4, len(w) - 2)].lower()) + r"[\w-]*")
+    return r"\s+(?:\S+\s+)?".join(parts) or re.escape(name)
+
+
+_deps = {"t": 0.0, "v": {}}
+
+
+def dep_patterns() -> dict:
+    """Подразделения = те, для которых в базе есть действующие регламенты (новый документ — новое подразделение
+    без правки кода); для трёх исходных — ещё и разговорные варианты («ДИБ», «техдирекция»)."""
+    if time.time() - _deps["t"] > 30:
+        pats = dict(DEP_ALIASES)
+        try:
+            for d in search.departments():
+                pats.setdefault(d, name_pattern(d))
+        except Exception:
+            pass
+        _deps.update(t=time.time(), v=pats)
+    return _deps["v"]
+
+
+def detect_departments(text: str) -> list[str]:
+    """Все подразделения, названные в тексте, в порядке упоминания."""
+    found = []
+    for dep, pat in dep_patterns().items():
+        m = re.search(pat, text, re.I)
+        if m:
+            found.append((m.start(), dep))
+    return [d for _, d in sorted(found)]
+
+
 def detect_department(text: str) -> str | None:
-    for dep, pat in DEP_ALIASES.items():
-        if re.search(pat, text, re.I):
-            return dep
+    found = detect_departments(text)
+    return found[0] if found else None
+
+
+# Подразделение, названное в вопросе, но которого в базе нет: «в Дирекции облачных решений», «у нас в бухгалтерии».
+UNIT_RE = re.compile(r"(?<![а-яё])((?:дирекци|департамент|бухгалтери|казначейств)[а-яё]*(?:\s+[а-яё-]{4,}){0,3})", re.I)
+UNIT_STOP = {"этой", "нашей", "моей", "своей", "какой", "которой", "есть", "будет", "надо", "нужно", "можно",
+             "должен", "должна", "согласовать", "назначает", "назначить", "отвечает"}
+
+
+def unknown_unit(text: str) -> str | None:
+    if detect_department(text):
+        return None
+    for m in UNIT_RE.finditer(text):
+        words = m.group(1).split()
+        name = [words[0]] + [w for w in words[1:] if w.lower() not in UNIT_STOP][:2]
+        if len(name) >= 2 or words[0].lower().startswith(("бухгалтери", "казначейств")):
+            return " ".join(name)
     return None
+
+
+QUESTION_START = re.compile(r"^(кто|что|как|когда|где|какой|какая|какие|каким|сколько|можно|нужно|надо|должен|почему|зачем|в какой|в каком)\b", re.I)
+
+
+def looks_new_question(message: str, options: list[str]) -> bool:
+    """Вместо выбора варианта сотрудник задал новый вопрос (ревью Fable v0.4: раньше он считался названием подразделения)."""
+    words = norm(message).split()
+    if len(words) < 5 or any(norm(o) in norm(message) for o in options) or ALL_RE.search(message):
+        return False
+    return "?" in message or bool(QUESTION_START.match(message.strip()))
+
+
+FOLLOW_START = {"а", "и", "но", "тогда", "еще", "ещё", "ну"}
+
+
+def is_followup(message: str) -> bool:
+    """Короткое продолжение темы предыдущего вопроса: «А в какой срок?», «А в ДБРЦТ?», «И кто согласует?»."""
+    words = norm(message).split()
+    if not words or len(words) > 8:
+        return False
+    return words[0] in FOLLOW_START or len([w for w in words if len(w) >= 5]) <= 1
+
+
+# «Где найти регламент …», «в каком регламенте написано …» — сотруднику нужен документ, а не пересказ (eval F3).
+LOCATE_RE = re.compile(r"(где|как)\s+(найти|посмотреть|открыть|почитать|взять|лежит|находится)\s+(регламент|документ|положени|инструкци)"
+                       r"|в\s+каком\s+(регламенте|документе)\s+(написано|описан|указан|сказано|прописан|есть|говорится)", re.I)
 
 
 def load_dialog(dialog_id: str) -> dict:
@@ -207,7 +320,8 @@ def fragment_label(r: dict) -> str:
     return f"{where} ({r.get('department') or 'вся компания'})"
 
 
-def run(message: str, dialog_id: str | None = None, user_name: str = "Сотрудник", user_email: str | None = None):
+def run(message: str, dialog_id: str | None = None, user_name: str = "Сотрудник", user_email: str | None = None,
+        user_login: str | None = None, user_department: str | None = None, nocache: bool = False):
     t0 = time.time()
     usage = llm.Usage()
     steps = []
@@ -219,12 +333,18 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         steps.append(ev)
         return ev
 
+    cache = {}   # ключ и версия базы для мгновенного ответа на повторный вопрос
+
     def done(result, keep_state=None):
-        return finalize(dialog_id, keep_state or {}, question, result, steps, usage, t0, user_name)
+        if keep_state is None and result.get("status") in ("answer", "escalated"):
+            keep_state = {"last": {"question": question, "department": department}}   # для «А в какой срок?»
+        return finalize(dialog_id, keep_state or {}, question, result, steps, usage, t0, user_name, user_login, cache)
 
     # 0. Контекст диалога: ответ на уточняющий вопрос продолжает исходный вопрос.
     pending = state.get("pending")
-    all_variants = False
+    all_variants = followup = False
+    if pending and looks_new_question(message, pending.get("options", [])) and not detect_department(message):
+        pending, state = None, {"last": state.get("last")} if state.get("last") else {}
     if pending:
         question = pending["question"]
         department = pending.get("department")
@@ -249,20 +369,57 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
                     return
                 yield step("Регламента для названного подразделения в базе нет — не отвечаю по чужим регламентам", tool="check")
                 result = escalate(question + f"\nПодразделение сотрудника: {name} (регламента для него в базе нет)",
-                                  None, user_name, user_email, [])
+                                  None, user_name, user_email, [], user_login)
                 yield step(result["step"], tool="escalate")
                 yield from done(result)
                 return
-            clar.append(f"Подразделение: {department or ('все варианты' if all_variants else message)}")
+            # Ответ сотрудника сохраняется целиком: «проектная деятельность Дирекции ИБ», «Дирекция ИБ, проектный офис»
+            # уточняют и процесс — раньше оставалось только название подразделения (слепой набор, H16/H18).
+            dep_txt = department or ('все варианты' if all_variants else message)
+            clar.append(f"Подразделение: {dep_txt}" + (f" (ответ сотрудника: «{message.strip()[:80]}»)"
+                                                        if department and norm(message) != norm(department) else ""))
         else:
             clar.append(f"{pending.get('clarify_question', 'Уточнение')} — {message}")
         state.pop("pending", None)
         yield step(f"Продолжаю вопрос с учётом уточнения: «{message}»")
     else:
+        last = state.get("last")
         question, department, state = message, None, {"clarifications": []}
-    department = department or detect_department(question + " " + " ".join(state.get("clarifications", [])))
+        followup = bool(last and is_followup(message))
+        if followup:
+            # Продолжение темы: вопрос понимаем вместе с предыдущим; подразделение — названное сейчас или прежнее.
+            question = f"{last['question']} — {message}"
+            department = detect_department(message) or last.get("department")
+            yield step(f"Продолжение предыдущего вопроса: «{last['question'][:120]}»", tool="plan")
+    in_question = detect_departments(question) if not pending else []
+    if not department and len(in_question) >= 2:
+        # Комплексный вопрос сразу про несколько подразделений — отвечаем по каждому отдельно (ревью Fable v0.4).
+        all_variants = True
+        state["variants"] = in_question
+    department = department or (None if all_variants else
+                                detect_department(question + " " + " ".join(state.get("clarifications", []))))
+    # Подразделение из учётной записи сотрудника: если в вопросе не названо другое — отвечаем по регламенту его
+    # подразделения (уточнять не нужно) и говорим об этом в ответе; «А в ДБРЦТ?» — ответ по другому подразделению.
+    scope_note = ""
+    if (not department and not all_variants and not pending and user_department
+            and user_department in dep_patterns() and not unknown_unit(question)):
+        department = user_department
+        scope_note = (f"Ответ по регламенту вашего подразделения ({department}). "
+                      "Если вопрос о другом подразделении — назовите его.")
+        yield step(f"Подразделение в вопросе не названо — беру из учётной записи сотрудника: {department}", tool="plan")
     full_q = question + ("\nУточнения пользователя: " + "; ".join(state["clarifications"]) if state.get("clarifications") else "")
     n_clar = len(state.get("clarifications", []))
+
+    # 0а. Повторный вопрос: тот же вопрос по тому же подразделению уже получил проверенный ответ, а регламенты
+    #     и разъяснения с тех пор не менялись — отдаём его сразу, без LLM (заказчик: «минуту ждать не будут»).
+    if not pending and not n_clar and not all_variants and not followup:
+        cache.update(key=f"{norm(question)}|{department or ''}", ver=corpus_version())
+        hit = None if nocache else cached_answer(cache["key"], cache["ver"])
+        if hit:
+            yield step(f"Такой же вопрос уже задавали (запрос № {hit['id']}); регламенты и разъяснения с тех пор "
+                       "не менялись — показываю проверенный ответ без повторной генерации", tool="cache")
+            yield from done(hit["result"] | {"from_cache": hit["id"]})
+            return
 
     # 0б. Мгновенно (1–2 с, без LLM): где в регламентах искать ответ — ссылки на пункты.
     #     Заказчику важно: часто сотруднику нужно просто найти регламент и пункт.
@@ -271,6 +428,18 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         yield {"type": "sources", "ms": int((time.time() - t0) * 1000),
                "items": [{"label": fragment_label(h), "doc_id": h["doc_id"], "clause_no": h["clause_no"],
                           "snippet": h["text"][:160]} for h in quick]}
+
+    # 0в. «Где найти регламент …» — называем документ сразу, без генерации ответа.
+    if not pending and LOCATE_RE.search(message):
+        doc = locate_document(question, department, quick)
+        if doc:
+            yield step(f"Сотрудник ищет документ — нашёл: «{doc['title']}»", tool="search")
+            yield from done({"status": "answer", "answer": f"Это регламент «{doc['title']}»"
+                             + (f" ({doc['department']})" if doc.get("department") else "")
+                             + ". Он открывается по ссылке ниже и на вкладке «Документы».",
+                             "citations": [{"id": "D", "quote": "", "source": doc["title"], "doc_id": doc["id"],
+                                            "clause_no": None, "kind": "chunk"}], "steps": [], "caveat": ""})
+            return
 
     # 1. Разбор вопроса и план поиска (вызов LLM № 1).
     yield step("Разбираю вопрос и составляю план поиска", tool="plan")
@@ -299,7 +468,8 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
         for dep in state.get("variants", []):
             hits += search.hybrid(queries, dep, k=2)
     else:
-        hits = rerank(question, search.hybrid(queries, department, k=config.TOP_K + 4))[:config.TOP_K]
+        raw = search.hybrid(queries, department, k=config.TOP_K + 4)
+        hits = merge_rankings(raw, rerank(question, [dict(h) for h in raw]), config.TOP_K)
     kb = search.kb_search(full_q, department)
     yield step(f"Нашёл {len(hits)} пунктов в {len({h['doc_id'] for h in hits})} регламентах"
                + (f" и {len(kb)} разъяснений службы качества" if kb else ""), tool="search",
@@ -311,16 +481,29 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     if top < RELEVANCE_MIN and not kb:
         yield step(f"Близких пунктов в регламентах нет (лучшая близость {top:.2f} < {RELEVANCE_MIN}) — "
                    "не отвечаю от себя", tool="check")
-        result = escalate(full_q, department, user_name, user_email, [])
+        result = escalate(full_q, department, user_name, user_email, [], user_login)
         yield step(result["step"], tool="escalate")
         yield from done(result)
         return
 
+    # 2в. В вопросе названо подразделение, регламентов которого в базе нет («в Дирекции облачных решений»):
+    #     не подменяем его чужим регламентом — как и при ответе на уточнение, предлагаем выбрать или передаём в СК.
+    unit = unknown_unit(question) if not department and not all_variants and not n_clar else None
+    if unit:
+        opts = [d for d, v in sorted(scores.items(), key=lambda x: -x[1]) if d and v >= RELEVANCE_MIN][:4]
+        q = (f"Регламента для подразделения «{unit}» в базе нет — по этому вопросу регламенты есть для: "
+             f"{', '.join(opts)}. Выберите одно из них или передам вопрос в службу качества.")
+        state["pending"] = {"kind": "department", "question": question, "options": opts, "unknown": 1}
+        yield step(f"Подразделение «{unit}» не найдено среди регламентов — уточняю", tool="check")
+        yield from done({"status": "clarify", "answer": q, "clarify_question": q,
+                         "options": opts + [ALL_VARIANTS, OTHER_DEP], "citations": []}, state)
+        return
+
     # 3. Проверка однозначности по подразделению (кодом): в разных подразделениях порядок разный.
     if not department and not all_variants and n_clar < MAX_CLARIFY and hits and not kb:
-        deps = [d for d, v in sorted(scores.items(), key=lambda x: -x[1]) if v >= top - AMBIGUITY_GAP and v >= 0.5]
+        deps = [d for d, v in sorted(scores.items(), key=lambda x: -x[1]) if d and v >= top - AMBIGUITY_GAP and v >= 0.5]
         yield step("Близость вопроса к регламентам подразделений: "
-                   + ", ".join(f"{d} {v:.2f}" for d, v in sorted(scores.items(), key=lambda x: -x[1])), tool="check")
+                   + ", ".join(f"{d or 'вся компания'} {v:.2f}" for d, v in sorted(scores.items(), key=lambda x: -x[1])), tool="check")
         if len(deps) >= 2:
             q = "Порядок отличается в разных подразделениях. О каком подразделении ваш вопрос?"
             state["pending"] = {"kind": "department", "question": question, "options": deps}
@@ -341,9 +524,14 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
                                      "gaps": [x["dst_ref_text"] for x in gaps]})
 
     # 5. Сборка доказательств: пункты (с подпунктами и связанными), разъяснения. Бюджет токенов.
-    evidence, budget = {}, config.MAX_EVIDENCE_TOKENS + (400 if all_variants else 0)
-    for r in (hits[:6] if all_variants else hits[:4] + extra[:1]):
-        text = r["text"] if len(r["text"]) <= 500 else r["text"][:500] + " …"
+    # Модели — 6 пунктов (было 4): на слепом наборе 27.11 нужный пункт стоял 5–6-м в H06, H18, H28 (неверный ответ
+    # по соседнему пункту) и вторым нужным в H08; цена — ~10–15 с чтения контекста на CPU.
+    evidence, budget = {}, config.MAX_EVIDENCE_TOKENS + 900
+    for i, r in enumerate(hits[:6] if all_variants else hits[:6] + extra[:1]):
+        # Первые два пункта — до 1200 знаков: перечни условий длиннее 500 знаков (п. 9.1 — 668, п. 5.2.3 — 822, п. 7.1
+        # ДБРЦТ — 829), обрезка на 500 прятала условия и числа (T14, H02, H09); остальные — до 500.
+        limit = 1200 if i < 2 and not all_variants else 500
+        text = r["text"] if len(r["text"]) <= limit else r["text"][:limit] + " …"
         cost = len(text) // 3
         if budget - cost < 0 and evidence:
             continue
@@ -395,8 +583,13 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
     if status == "answer" and valid:
         cited_text = " ".join(evidence[str(c["id"]).strip("[] ")]["text"] for c in valid)
         clause_nos = {str(e.get("clause_no")) for e in evidence.values()}
-        missing = [n for n in dict.fromkeys(re.findall(r"\d+(?:[.,]\d+)?", out.get("answer", "")))
-                   if n not in clause_nos and n not in cited_text and n.replace(",", ".") not in cited_text]
+        # Числа сравниваются целиком: «3» не находится внутри «2.3» или «30» (ревью Fable v0.4, E6).
+        num = lambda t: {x.replace(",", ".") for x in NUMBER.findall(t)}
+        cited_nums = num(cited_text)
+        # Номера элементов перечня в ответе («1) …; 2) …») — не числа из регламента (слепой набор, H04: ложная оговорка).
+        answer_text = LIST_MARK.sub(" ", out.get("answer", ""))
+        missing = [n for n in dict.fromkeys(x.replace(",", ".") for x in NUMBER.findall(answer_text))
+                   if n not in clause_nos and n not in cited_nums]
         if missing:
             note = "В регламенте не указано: " + ", ".join(missing) + " — это условие из вопроса, регламент его не подтверждает."
             out["caveat"] = (out.get("caveat", "") + " " + note).strip()
@@ -422,34 +615,79 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
                          "citations": valid}, state)
         return
     if status == "not_found":
-        result = escalate(full_q, department, user_name, user_email, gaps)
+        result = escalate(full_q, department, user_name, user_email, gaps, user_login)
         yield step(result["step"], tool="escalate")
         yield from done(result)
         return
     gap_names = [x["dst_ref_text"] for x in gaps]
-    result = {"status": "answer", "answer": out.get("answer", ""), "steps": out.get("steps", []),
+    cited_ids = {str(c["id"]).strip("[] ") for c in valid}
+    cited_docs = {c.get("doc_id") for c in valid if c.get("kind") == "chunk"}
+    see_also = []
+    for fid, e in evidence.items():
+        # Специалист качества, кроме прямого ответа, говорит «учтите ещё вот это» (Q&A 27.11): пункты, которые агент
+        # нашёл рядом с ответом (тот же регламент, граф связей), но в ответ не вошли — ссылками, без пересказа.
+        if e["kind"] == "chunk" and fid not in cited_ids and e.get("doc_id") in cited_docs and e.get("clause_no"):
+            see_also.append({"label": fragment_label(e), "doc_id": e["doc_id"], "clause_no": e["clause_no"],
+                             "snippet": e["text"][:140]})
+    result = {"status": "answer", "see_also": see_also[:2], "answer": out.get("answer", ""), "steps": out.get("steps", []), "scope_note": scope_note,
               "caveat": out.get("caveat", "").strip(), "citations": valid, "gaps": gap_names,
               "used_kb": any(c["kind"] == "kb" for c in valid)}
     # Ответ с оговоркой (неполный/спорный) → дополнительно письмо в службу качества: заказчик — «сотрудник не должен
     # остаться без ответа: если ответ неоднозначен, в любом случае отправляем в службу качества».
-    if result["caveat"] and not result["used_kb"]:
-        esc = escalate(full_q + f"\n(Агент ответил частично, оговорка: {result['caveat']})", department, user_name, user_email, gaps)
+    conflict = bool(out.get("conflict")) and any(e["kind"] == "kb" for e in evidence.values())
+    if not conflict and not result["used_kb"]:
+        # Близкое разъяснение службы качества есть, но ответ построен на регламенте без него — проверяем отдельно,
+        # не противоречат ли они (Q&A заказчика 27.11: при расхождении — предупредить сотрудника и службу качества).
+        cited_chunks = "\n".join(evidence[str(c["id"]).strip("[] ")]["text"][:600] for c in valid if c["kind"] == "chunk")
+        for a in [k for k in kb if k.get("sim", 0) >= KB_CONFLICT_SIM][:1]:
+            yield step(f"Есть разъяснение службы качества (запрос № {a['ticket_id']}) по похожему вопросу — сверяю "
+                       "его с пунктом регламента", tool="verify")
+            v = llm.chat_json(SYS_CONFLICT, f"Разъяснение службы качества: {a['answer']}\n\nПункты регламента:\n{cited_chunks}",
+                              usage, max_tokens=60, slot=0)
+            if v.get("conflict") is True:
+                conflict = True
+                result["caveat"] = (result["caveat"] + f" Разъяснение службы качества (запрос № {a['ticket_id']}): «{a['answer'][:200]}» "
+                                    "расходится с регламентом. Действуйте по регламенту; поступить иначе можно только по "
+                                    "отдельному согласованию с руководителем, у которого есть такие полномочия.").strip()
+                yield step(f"Разъяснение противоречит регламенту ({v.get('why', '')}) — предупреждаю и сообщаю "
+                           "службе качества", tool="verify")
+    result["conflict"] = conflict
+    if result["caveat"] and (not result["used_kb"] or conflict):
+        # Q&A заказчика 27.11: при противоречии разъяснения и регламента — предупредить сотрудника и сообщить службе
+        # качества: нужно решение (изменить регламент или уточнить/отозвать разъяснение).
+        note = ("Противоречие: разъяснение службы качества расходится с пунктом регламента — нужно решение: изменить "
+                "регламент или уточнить (отозвать) разъяснение" if conflict else "Агент ответил частично")
+        esc = escalate(full_q + f"\n({note}; оговорка: {result['caveat']})", department, user_name, user_email, gaps, user_login)
         result["also_escalated"] = True
         result["ticket_id"] = esc["ticket_id"]
-        result["caveat"] += (f" Я также отправил вопрос в службу качества ({config.QUALITY_EMAIL})"
-                             + (f", вы в копии" if user_email else "") + " — точный ответ придёт на почту.")
+        result["caveat"] += ((f" Я также отправил вопрос в службу качества ({config.QUALITY_EMAIL})"
+                              + (f", вы в копии" if user_email else "") + " — точный ответ придёт на почту.")
+                             if esc["mail_sent"] else f" Вопрос записан для службы качества (запрос № {esc['ticket_id']}).")
         yield step(esc["step"] + " (ответ с оговоркой)", tool="escalate")
     yield from done(result)
 
 
-def escalate(question, department, user_name, user_email, gaps) -> dict:
+def locate_document(question: str, department: str | None, quick: list[dict]) -> dict | None:
+    """Документ, который ищет сотрудник: совпадение слов названия с вопросом + документы из мгновенного поиска."""
+    with db.conn() as c:
+        docs = c.execute("SELECT id, title, department, process FROM documents WHERE status='in_force'").fetchall()
+    if department:
+        docs = [d for d in docs if d["department"] == department] or docs
+    qs, in_quick = content_stems(question), [h["doc_id"] for h in quick]
+    scored = [(len(qs & content_stems(f"{d['title']} {d['process'] or ''}")) * 2
+               + (2 - min(in_quick.index(d["id"]), 2) if d["id"] in in_quick else 0), d) for d in docs]
+    scored = [x for x in scored if x[0] > 0]
+    return max(scored, key=lambda x: x[0])[1] if scored else None
+
+
+def escalate(question, department, user_name, user_email, gaps, user_login=None) -> dict:
     """Кейс 1: ответа в регламентах нет → письмо в службу качества, сотрудник в копии (как просил заказчик).
     Запрос сохраняется у агента: ответ службы качества (письмом) пополнит базу разъяснений — кейс 3."""
     gap_txt = [x["dst_ref_text"] for x in gaps]
     with db.conn() as c:
-        tid = c.execute("""INSERT INTO tickets(user_name,department,question,context,mail_to)
-                           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
-                        (user_name, department, question, json.dumps({"gaps": gap_txt, "user_email": user_email},
+        tid = c.execute("""INSERT INTO tickets(user_name,user_login,department,question,context,mail_to)
+                           VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                        (user_name, user_login, department, question, json.dumps({"gaps": gap_txt, "user_email": user_email},
                                                                      ensure_ascii=False), config.QUALITY_EMAIL)).fetchone()["id"]
         subject = mailbox.subject_for(tid, question)
         body = (f"Здравствуйте!\n\nСотрудник {user_name}"
@@ -474,12 +712,17 @@ def escalate(question, department, user_name, user_email, gaps) -> dict:
                   (f"Тема: {subject}\nКому: {config.QUALITY_EMAIL}" + (f"\nКопия: {user_email}" if user_email else "")
                    + f"\n\n{body}", json.dumps({"sent": sent}), tid))
     who = f" и поставил вас в копию ({user_email})" if user_email else ""
-    ans = (f"В действующих регламентах нет ответа на этот вопрос, поэтому я не буду отвечать от себя. "
-           f"Я отправил ваш вопрос в службу качества ({config.QUALITY_EMAIL}){who} — ответ придёт на почту. "
-           "Когда служба качества ответит, ответ попадёт в базу знаний, и на такой вопрос я смогу отвечать сам.")
+    if sent:
+        ans = (f"В действующих регламентах нет ответа на этот вопрос, поэтому я не буду отвечать от себя. "
+               f"Я отправил ваш вопрос в службу качества ({config.QUALITY_EMAIL}){who} — ответ придёт на почту. "
+               "Когда служба качества ответит, ответ попадёт в базу знаний, и на такой вопрос я смогу отвечать сам.")
+    else:   # почта не настроена или сработал лимит писем: не обещаем письмо, которого не было
+        ans = (f"В действующих регламентах нет ответа на этот вопрос, поэтому я не буду отвечать от себя. "
+               f"Вопрос записан в журнал службы качества (запрос № {tid}), но письмо сейчас не отправлено — "
+               "служба качества увидит его на вкладке «Служба качества».")
     if gap_txt:
         ans += f" Возможно, ответ есть в документе, которого нет в моей базе: {gap_txt[0]}."
-    if not user_email:
+    if not user_email and sent:
         ans += " Укажите свой e-mail в панели справа, чтобы получать копию."
     step = (f"Письмо в службу качества {config.QUALITY_EMAIL}" + (f", копия {user_email}" if user_email else "")
             + (" — отправлено" if sent else " — сформировано (почта не настроена)"))
@@ -487,15 +730,41 @@ def escalate(question, department, user_name, user_email, gaps) -> dict:
             "step": step}
 
 
-def finalize(dialog_id, state, question, result, steps, usage, t0, user_name):
+def corpus_version() -> str:
+    """Версия базы: действующие регламенты (с моментом загрузки) и разъяснения службы качества. Любая загрузка,
+    замена редакции, новое или отозванное разъяснение меняет версию — прежние ответы больше не переиспользуются."""
+    with db.conn() as c:
+        return c.execute("""SELECT md5(coalesce((SELECT string_agg(id || ':' || loaded_at, ',' ORDER BY id)
+                                                 FROM documents WHERE status = 'in_force'), '')
+                                       || '|' || coalesce((SELECT string_agg(id::text, ',' ORDER BY id) FROM kb_answers), '')) AS v
+                         """).fetchone()["v"]
+
+
+def cached_answer(key: str, ver: str) -> dict | None:
+    """Последний ответ на тот же вопрос при той же версии базы: только ответ по регламенту с подтверждёнными цитатами,
+    без оговорки и без отметки «неверно»."""
+    with db.conn() as c:
+        return c.execute("""SELECT id, result FROM query_log
+                            WHERE cache_key = %s AND corpus_ver = %s AND outcome = 'answered' AND result IS NOT NULL
+                              AND coalesce(feedback, '') <> 'down' AND coalesce(result->>'caveat', '') = ''
+                              AND jsonb_array_length(coalesce(result->'citations', '[]'::jsonb)) > 0
+                            ORDER BY id DESC LIMIT 1""", (key, ver)).fetchone()
+
+
+def finalize(dialog_id, state, question, result, steps, usage, t0, user_name, user_login=None, cache=None):
     save_dialog(dialog_id, state)
     latency = int((time.time() - t0) * 1000)
     outcome = {"answer": "answered", "clarify": "clarify", "escalated": "escalated"}.get(result["status"], result["status"])
-    with db.conn() as c:
-        qid = c.execute("""INSERT INTO query_log(dialog_id,user_name,question,outcome,steps,citations,answer,tokens_in,tokens_out,
-                           llm_calls,latency_ms) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (dialog_id, user_name, question, outcome, json.dumps(steps, ensure_ascii=False, default=str),
-                         json.dumps(result.get("citations", []), ensure_ascii=False), result.get("answer"),
-                         usage.tokens_in, usage.tokens_out, usage.calls, latency)).fetchone()["id"]
     result.pop("step", None)
+    cache = cache or {}
+    with db.conn() as c:
+        qid = c.execute("""INSERT INTO query_log(dialog_id,user_name,user_login,question,outcome,steps,citations,answer,tokens_in,
+                           tokens_out,llm_calls,latency_ms,result,cache_key,corpus_ver)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                        (dialog_id, user_name, user_login, question, outcome, json.dumps(steps, ensure_ascii=False, default=str),
+                         json.dumps(result.get("citations", []), ensure_ascii=False), result.get("answer"),
+                         usage.tokens_in, usage.tokens_out, usage.calls, latency,
+                         json.dumps({k: v for k, v in result.items() if k not in ("from_cache", "ticket_id")},
+                                    ensure_ascii=False, default=str),
+                         None if result.get("from_cache") else cache.get("key"), cache.get("ver"))).fetchone()["id"]
     yield {"type": "result", "dialog_id": dialog_id, "query_id": qid, "latency_ms": latency} | usage.as_dict() | result

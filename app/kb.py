@@ -14,6 +14,11 @@ def add_answer(ticket_id: int, answer: str, answered_by: str, doc_id: int | None
                   (answer, answered_by, ticket_id))
         if not add_to_kb or (t["context"] or {}).get("type") == "inconsistency":
             return None
+        # Повторный ответ службы качества в той же ветке — уточнение: заменяет прежнее разъяснение, а не дублирует его.
+        old = [r["id"] for r in c.execute("SELECT id FROM kb_answers WHERE ticket_id=%s", (ticket_id,)).fetchall()]
+        if old:
+            c.execute("DELETE FROM doc_links WHERE src_answer = ANY(%s)", (old,))
+            c.execute("DELETE FROM kb_answers WHERE id = ANY(%s)", (old,))
         v = llm.embed([f"{t['question']}\n{answer}"])[0]
         dep = t["department"]
         if doc_id:
