@@ -6,7 +6,6 @@ run() — генератор событий для интерфейса: {"type"
 не знает подразделение — все варианты с источниками; спорный случай — ответ с оговоркой; нет ответа — письмо
 в службу качества с сотрудником в копии; вопрос не о регламентах — «обратитесь к руководителю».
 """
-import difflib
 import json
 import re
 import time
@@ -168,23 +167,20 @@ def rerank(question: str, hits: list[dict]) -> list[dict]:
 
 
 def quote_ok(quote: str, text: str) -> bool:
-    """Цитата есть во фрагменте: дословно — или с другими окончаниями слов (модель ставит «Ресурс-менеджер»
-    вместо «Ресурс-менеджеру», eval v8/v9 A5). Сравнение по основам (первые 5 букв): не меньше 85% слов цитаты
-    должны идти во фрагменте в том же порядке и почти подряд — выдуманная фраза так не пройдёт."""
+    """Цитата есть во фрагменте: дословно — или с другими окончаниями длинных слов (модель ставит «Ресурс-менеджер»
+    вместо «Ресурс-менеджеру», eval A5). Все слова цитаты должны идти во фрагменте подряд, одним блоком; слова от 5 букв
+    сравниваются по первым 5 буквам, числа и короткие слова («не», «до», «в») — точно. Поэтому не пройдут антоним
+    («разрешены» вместо «запрещены»), вставленное «не», другое число, выпавший запрет (ревью Fable v11)."""
     nq, nt = norm(quote), norm(text)
     if len(nq) < 8:
         return False
     if nq in nt:
         return True
-    qs, ts = [w[:5] for w in nq.split()], [w[:5] for w in nt.split()]
+    key = lambda w: w[:5] if len(w) >= 5 and not any(ch.isdigit() for ch in w) else w
+    qs, ts = [key(w) for w in nq.split()], [key(w) for w in nt.split()]
     if len(qs) < 4:
         return False
-    blocks = [b for b in difflib.SequenceMatcher(None, qs, ts, autojunk=False).get_matching_blocks() if b.size]
-    if not blocks:
-        return False
-    matched = sum(b.size for b in blocks)
-    span = blocks[-1].b + blocks[-1].size - blocks[0].b
-    return matched / len(qs) >= 0.85 and span <= len(qs) * 1.5
+    return any(ts[k:k + len(qs)] == qs for k in range(len(ts) - len(qs) + 1))
 
 
 def detect_department(text: str) -> str | None:
