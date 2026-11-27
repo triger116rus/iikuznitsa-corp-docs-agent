@@ -116,6 +116,8 @@ venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 `QUALITY_EMAIL`, `SMTP_HOST`, `IMAP_HOST` (без них письмо только формируется и показывается в интерфейсе).
 Служба systemd — `deploy/corpdocs-agent.service`. Пересборка графа без перезагрузки текста: `python -m app.ingest --links`.
 
+**План развития** — [docs/ROADMAP.md](docs/ROADMAP.md): что не реализовано в спринте, как сделаем и оценки.
+
 **Обслуживание** — [docs/OPERATIONS.md](docs/OPERATIONS.md): резервные копии (`deploy/backup.sh`, ежедневный таймер `deploy/corpdocs-backup.timer`) и восстановление, регулярные работы, замена модели и порогов с контрольным прогоном, диагностическая выгрузка с обезличиванием (`python -m app.diag`) — тексты регламентов и ответов наружу не уходят.
 Проверка качества: `python eval/run_eval.py --url <стенд> --cred <файл учёток>` — контрольные вопросы
 `eval/questions.json` (40, из них 17 ловушек) и слепой набор `eval/questions-holdout.json` (30 вопросов, составлены
