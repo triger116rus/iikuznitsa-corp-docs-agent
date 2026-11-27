@@ -383,7 +383,9 @@ async function loadUsers() {
   $("#userList").querySelectorAll(".uact").forEach(b => b.onclick = () => patch(row(b), {active: b.textContent === "включить"}));
   $("#userList").querySelectorAll(".ureset").forEach(b => b.onclick = async () => {
     if (!confirm("Сбросить пароль? Старый перестанет действовать, открытые сессии пользователя закроются.")) return;
-    const j = await (await api(`/api/users/${row(b)}/reset`, {method: "POST"})).json();
+    const r = await api(`/api/users/${row(b)}/reset`, {method: "POST"});
+    const j = await r.json();
+    if (!r.ok) return alert(j.detail || "не удалось");
     showPassword(j.password);
   });
   const deps = [...new Set(docsCache.map(d => d.department).filter(Boolean))];

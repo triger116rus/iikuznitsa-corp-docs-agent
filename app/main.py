@@ -129,9 +129,24 @@ def add_user(req: NewUser, request: Request):
     return {"user": jsonable(u), "password": password}
 
 
+PROTECTED_MSG = ("Демо-учётка стенда защищена: её пароль, роль, подразделение и доступ не меняются, чтобы другие "
+                 "проверяющие могли войти. Создайте своего пользователя и проверьте эти действия на нём.")
+
+
+def guard_protected(uid: int):
+    """Демо-учётки из PROTECTED_USERS не меняются через интерфейс администратора."""
+    if not config.PROTECTED_USERS:
+        return
+    with db.conn() as c:
+        r = c.execute("SELECT login FROM users WHERE id=%s", (uid,)).fetchone()
+    if r and r["login"] in config.PROTECTED_USERS:
+        raise HTTPException(403, PROTECTED_MSG)
+
+
 @app.post("/api/users/{uid}")
 def patch_user(uid: int, req: UserPatch, request: Request):
     me_ = auth.require(request, "admin")
+    guard_protected(uid)
     fields = req.model_dump(exclude_none=True)
     if uid == me_["id"] and (fields.get("role", "admin") != "admin" or fields.get("active") is False):
         raise HTTPException(400, "нельзя снять роль администратора или отключить самого себя")
@@ -141,6 +156,7 @@ def patch_user(uid: int, req: UserPatch, request: Request):
 @app.post("/api/users/{uid}/reset")
 def reset_user(uid: int, request: Request):
     auth.require(request, "admin")
+    guard_protected(uid)
     return {"password": auth.reset_password(uid)}
 
 

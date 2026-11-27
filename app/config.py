@@ -8,6 +8,9 @@ EMBED_URL = os.getenv("EMBED_URL", "http://127.0.0.1:8081")          # llama-ser
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 QUALITY_EMAIL = os.getenv("QUALITY_EMAIL", "quality@company.local")  # адрес службы качества
 ANSWER_SLA_HOURS = int(os.getenv("ANSWER_SLA_HOURS", "48"))
+# Демо-учётки стенда (через запятую): их пароль, роль, подразделение и доступ администратор не меняет — проверяющие
+# входят по паролям из описания и не должны блокировать друг друга. Пусто — защиты нет (в контуре заказчика).
+PROTECTED_USERS = {x.strip() for x in os.getenv("PROTECTED_USERS", "").split(",") if x.strip()}
 WEB_ANSWER = os.getenv("WEB_ANSWER", "1") == "1"   # запасной ввод ответа службы качества в интерфейсе (без почты)  # срок ответа службы качества; позже — «просрочено»
 # Почта службы качества: SMTP — отправка письма (сотрудник в копии), IMAP — чтение ответов службы качества.
 SMTP_HOST = os.getenv("SMTP_HOST", "")                               # пусто — письмо только в журнале
