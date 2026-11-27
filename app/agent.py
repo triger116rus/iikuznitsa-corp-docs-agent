@@ -169,6 +169,44 @@ RERANK_STOP = {"дирек", "делат", "котор", "нужно", "можн
                "чтобы", "этого", "между", "также", "каким", "какая"}
 
 
+ITEM_RE = re.compile(r"^\s*(?:[—–•●▪-]|\d{1,2}[).]|[а-яa-z][).])\s+")
+MIN_ITEMS, MAX_ITEMS = 2, 12
+
+
+def list_items(text: str) -> list[str]:
+    """Элементы перечня пункта («— …», «1) …», «а) …»). Строки после элемента, который кончается двоеточием, —
+    его подпункты (п. 9.1: «согласование Владельца бюджета …: — заключить договор …; — принять, оплатить …»)."""
+    items, nested = [], False
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = ITEM_RE.match(s)
+        if m and items and nested:
+            items[-1] += " " + s[m.end():].strip()
+        elif m:
+            items.append(s[m.end():].strip())
+            nested = s.rstrip().endswith(":")
+        elif items:
+            items[-1] += " " + s
+    return [i.rstrip(" ;.") for i in items]
+
+
+def missing_items(answer: str, items: list[str]) -> list[int]:
+    """«Весы» полноты: элемент перечня считается названным в ответе, если в ответе есть треть его отличительных
+    слов (но достаточно трёх) — тех, что не встречаются в других элементах (в п. 9.1 почти все условия начинаются
+    с «подписан договор … услуг», по общим словам любой ответ выглядел бы полным). Без отличительных слов — не судим."""
+    stems = [content_stems(i) for i in items]
+    ans = content_stems(answer)
+    out = []
+    for k, st in enumerate(stems):
+        own = st - set().union(*(s for j, s in enumerate(stems) if j != k))
+        need = min(3, max(1, round(len(own) / 3)))   # треть отличительных слов, но не больше трёх (длинный пересказ)
+        if own and len(own & ans) < need:
+            out.append(k)
+    return out
+
+
 def content_stems(s: str) -> set[str]:
     """Основы смысловых слов (первые 4 буквы слов от 5 букв: «отвечает» и «ответа» — одна основа) —
     для сверки «объекта» вопроса с пунктом."""
@@ -185,15 +223,18 @@ def rerank(question: str, hits: list[dict]) -> list[dict]:
     return sorted(hits, key=lambda h: -h["rank_score"])
 
 
-def merge_rankings(raw: list[dict], reranked: list[dict], k: int) -> list[dict]:
+def merge_rankings(raw: list[dict], reranked: list[dict], k: int, quick: list[dict] | None = None) -> list[dict]:
     """В ответ идут первые 2 пункта обоих порядков: по смысловым словам вопроса и исходного гибридного поиска.
     Бонус за слова сильнее разницы мест в гибридном поиске, поэтому один порядок мог вытеснить верный пункт другого:
     «что приложить к заявке» — п. 2.2 («К заявке прикладываются») 2-й в гибридном поиске, но 7-й после
     переупорядочивания (другие пункты делят с вопросом слова «закупка», «облачных»; тест загрузки 27.11).
     Проверено на S3, T8, A5, A6: набор первых 4 пунктов не изменился или стал полнее. Вес слов по IDF пробовали —
-    S3 ухудшился (1-е место → 3-е), не взяли."""
+    S3 ухудшился (1-е место → 3-е), не взяли.
+    quick — первые пункты «Где искать» (поиск по одному исходному вопросу): под-запросы плана меняются от запуска
+    к запуску и могли «размыть» порядок — п. 2.2 был 2-м в «Где искать», но не попадал к модели, и агент отвечал
+    «ответа нет» (тест загрузки 27.11, вечер). Поэтому 2 первых пункта «Где искать» тоже идут в ответ."""
     top = []
-    for h in reranked[:2] + raw[:2] + reranked[2:]:
+    for h in reranked[:2] + raw[:2] + (quick or [])[:2] + reranked[2:]:
         if h["id"] not in {x["id"] for x in top}:
             top.append(h)
     return top[:k]
@@ -479,7 +520,9 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
             hits += search.hybrid(queries, dep, k=2)
     else:
         raw = search.hybrid(queries, department, k=config.TOP_K + 4)
-        hits = merge_rankings(raw, rerank(question, [dict(h) for h in raw]), config.TOP_K)
+        # «Где искать» искался до плана: берём его пункты, только если они из подразделения, выбранного для ответа.
+        quick_dep = [h for h in quick if not department or h.get("department") in (None, department)]
+        hits = merge_rankings(raw, rerank(question, [dict(h) for h in raw]), config.TOP_K, quick_dep)
     kb = search.kb_search(full_q, department)
     yield step(f"Нашёл {len(hits)} пунктов в {len({h['doc_id'] for h in hits})} регламентах"
                + (f" и {len(kb)} разъяснений службы качества" if kb else ""), tool="search",
@@ -612,6 +655,28 @@ def run(message: str, dialog_id: str | None = None, user_name: str = "Сотру
             note = "Проверьте полный текст пункта: в регламенте может быть несколько условий или вариантов."
             out["caveat"] = (out.get("caveat", "") + " " + note).strip()
             yield step(f"Проверка кодом: в ответе «{', '.join(absolute)}», в пунктах этого нет — добавил оговорку", tool="verify")
+        # «Весы» полноты: модель часто называет часть перечня (слепой набор: 11 из 13 ошибок — неполный ответ при
+        # верном пункте; T14 — 2 условия из 4, пропущено главное). Код сверяет перечень цитируемого пункта с ответом
+        # и, если элементы пропущены, добавляет полный перечень дословно из регламента — выдумать его нельзя.
+        blocks, n_miss, seen = [], 0, set()
+        for c in valid:
+            e = evidence[str(c["id"]).strip("[] ")]
+            if c["kind"] != "chunk" or not e.get("id") or e["id"] in seen:
+                continue
+            seen.add(e["id"])
+            with db.conn() as conn:
+                row = conn.execute("SELECT text FROM chunks WHERE id=%s", (e["id"],)).fetchone()
+            items = list_items(row["text"]) if row else []
+            if not MIN_ITEMS <= len(items) <= MAX_ITEMS:
+                continue
+            miss = missing_items(out.get("answer", ""), items)
+            if miss:
+                n_miss += len(miss)
+                blocks.append(f"Полный перечень — {fragment_label(e)}, дословно:\n" + "\n".join(f"— {i}" for i in items))
+        if blocks:
+            out["answer"] = out.get("answer", "").rstrip() + "\n\n" + "\n\n".join(blocks)
+            yield step(f"Проверка полноты кодом: в ответе не названо {n_miss} элем. перечня — добавил полный перечень "
+                       "дословно из регламента", tool="verify")
     if status == "answer" and not valid:
         status = "not_found"
         yield step("Ответ не подтверждён дословными цитатами — недостоверный ответ не показываю", tool="verify")
